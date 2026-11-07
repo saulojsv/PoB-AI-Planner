@@ -2489,8 +2489,8 @@ local function run(build, parsed, control, job)
 		zoneCoverage.zoneResults = zoneCoverage.zoneResults or { }
 	else
 		if phase.searchTree then
-			local function baseRouteProgress(done, total, expanded, targetId)
-				routeProgress(done, total, expanded, targetId, nil, nil, "rotas-base")
+			local function baseRouteProgress(done, total, expanded, targetId, operation)
+				routeProgress(done, total, expanded, targetId, nil, nil, operation or "rotas-base")
 			end
 			treeCandidates, treeError, pathCancelled = treeSearch.BuildCandidateNodes(build.spec, parsed, singleRouteQuota,
 				baseRouteProgress, maxAddedPoints, control, candidateRegionMap)

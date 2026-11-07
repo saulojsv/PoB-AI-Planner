@@ -2183,11 +2183,14 @@ function OptimizerTabClass.FormatResultDetails(tab, viewWidth, selectedRoute)
 			local nodePowerStat = metricDisplayName(nodePowerCoverage.stat or "")
 			if nodePowerCoverage.status == "used" then
 				local routePath = nodePowerCoverage.routePath
+				local keyDistanceText = type(routePath) == "table"
+					and (routePath.keyNodeDistanceIndex == "built" or routePath.keyNodeDistanceIndex == "reused")
+					and (" Precomputed hop distances for " .. tostring(routePath.keyNodeCount or 0) .. " native Notables/Keystones.") or ""
 				local routePathText = type(routePath) == "table" and routePath.status == "available"
 					and (" Native marginal values guide equal-cost path ties across "
 						.. tostring(routePath.hintedNodes or 0) .. " eligible nodes; "
 						.. tostring(routePath.hotspotChainsGenerated or 0)
-						.. " connected Notable/Keystone route(s) were proposed.") or ""
+						.. " connected Notable/Keystone route(s) were proposed." .. keyDistanceText) or ""
 				add("Show Node Power: native " .. nodePowerStat .. " guided target order for "
 					.. tostring(nodePowerCoverage.prioritizedTargets or 0) .. " of "
 					.. tostring(nodePowerCoverage.targets or 0) .. " legal targets."

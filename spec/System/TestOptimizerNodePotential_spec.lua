@@ -249,16 +249,111 @@ describe("AI Planner exact node-potential review", function()
 		assert.are.same({ 2, 4 }, chain.hotspotNodeIds)
 		assert.are.same({ 2, 3, 4 }, chain.nodeIds,
 			"the connector route should retain seed-to-target order across both hotspots")
+		assert.are.equal(3, chain.hotspotHopDistance,
+			"the precomputed key-node index should report the native tree hop distance")
 		assert.are.equal(1, parsed.search.nodePowerCoverage.routePath.hotspotChainsGenerated)
 		assert.are.equal("rebuilt", parsed.search.routeGraphCache.status)
+		assert.are.equal("built", parsed.search.routeGraphCache.keyNodeDistanceIndex.status)
+		assert.are.equal(2, parsed.search.routeGraphCache.keyNodeDistanceIndex.nodes)
+		assert.are.equal(2, parsed.search.routeGraphCache.keyNodeDistanceIndex.reachablePairs)
 		buildCandidates()
 		assert.are.equal("hit", parsed.search.routeGraphCache.status,
 			"repeated searches over the same immutable tree should reuse compact adjacency")
+		assert.are.equal("reused", parsed.search.routeGraphCache.keyNodeDistanceIndex.status,
+			"repeated searches should reuse the precomputed Notable/Keystone distances")
+		table.remove(start.linked, 2)
+		table.remove(connector.linked, 1)
+		buildCandidates()
+		assert.are.equal("rebuilt", parsed.search.routeGraphCache.status,
+			"a topology change must invalidate adjacency even when the node set is unchanged")
+		assert.are.equal("built", parsed.search.routeGraphCache.keyNodeDistanceIndex.status,
+			"a topology change must rebuild key-node distances")
+		assert.are.equal(0, parsed.search.routeGraphCache.keyNodeDistanceIndex.reachablePairs,
+			"disconnected key nodes must not retain stale reachable distances")
 		spec.nodes[5] = { id = 5, type = "Normal", alloc = false, x = 3, y = 1, linked = { } }
 		buildCandidates()
 		assert.are.equal("rebuilt", parsed.search.routeGraphCache.status,
 			"a changed node set must invalidate cached adjacency")
+		assert.are.equal("built", parsed.search.routeGraphCache.keyNodeDistanceIndex.status,
+			"a changed node set must rebuild the key-node distance index")
 		assert.are.equal(5, parsed.search.routeGraphCache.nodes)
+		newBuild()
+	end)
+
+	it("ranks hotspot pairs by native power per precomputed tree hop", function()
+		newBuild()
+		local start = { id = 1, type = "ClassStart", alloc = true, x = 0, y = 0, linked = { } }
+		local first = { id = 2, type = "Notable", alloc = false, x = 1, y = 0, linked = { }, dn = "High Power" }
+		local nearby = { id = 3, type = "Notable", alloc = false, x = 0, y = 1, linked = { }, dn = "Nearby Power" }
+		local distant = { id = 4, type = "Notable", alloc = false, x = 5, y = 0, linked = { }, dn = "Distant Power" }
+		local connectorA = { id = 5, type = "Normal", alloc = false, linked = { } }
+		local connectorB = { id = 6, type = "Normal", alloc = false, linked = { } }
+		local connectorC = { id = 7, type = "Normal", alloc = false, linked = { } }
+		local function connect(left, right)
+			left.linked[#left.linked + 1] = right
+			right.linked[#right.linked + 1] = left
+		end
+		connect(start, first)
+		connect(start, nearby)
+		connect(first, connectorA)
+		connect(connectorA, connectorB)
+		connect(connectorB, connectorC)
+		connect(connectorC, distant)
+		first.power = { singleStat = 100 }
+		nearby.power = { singleStat = 80 }
+		distant.power = { singleStat = 90 }
+		local spec = {
+			nodes = { [1] = start, [2] = first, [3] = nearby, [4] = distant,
+				[5] = connectorA, [6] = connectorB, [7] = connectorC },
+			allocNodes = { [1] = start },
+			tree = { classes = { [1] = { name = "Test", startNodeId = 1 } } },
+		}
+		local parsed = assert(Inputs.Parse({ generationPhase = "tree", maxAddedPoints = "10",
+			evaluationBudget = "8", seed = "31" }))
+		parsed.search.useShowNodePower = true
+		parsed.search.nodePowerStat = "CombinedDPS"
+		parsed.search.nodePowerFocusStat = "CombinedDPS"
+		local candidates, err = TreeSearch.BuildCandidateNodes(spec, parsed, 8, nil, 10)
+		assert.is_truthy(candidates, err)
+		assert.are.equal("node_power_hotspot_chain", candidates[1].routeFamily)
+		assert.are.same({ 2, 3 }, candidates[1].hotspotNodeIds,
+			"the stronger nearby pair should rank ahead of a slightly weaker but much longer pair")
+		assert.are.equal(2, candidates[1].hotspotHopDistance)
+		newBuild()
+	end)
+
+	it("cancels while incrementally building the key-node distance cache", function()
+		newBuild()
+		local start = { id = 1, type = "ClassStart", alloc = true, linked = { } }
+		local nodes = { [1] = start }
+		for nodeId = 2, 18 do
+			nodes[nodeId] = { id = nodeId, type = "Notable", alloc = false, linked = { }, power = { singleStat = nodeId } }
+		end
+		for nodeId = 1, 17 do
+			local left, right = nodes[nodeId], nodes[nodeId + 1]
+			left.linked[#left.linked + 1] = right
+			right.linked[#right.linked + 1] = left
+		end
+		local spec = {
+			nodes = nodes,
+			allocNodes = { [1] = start },
+			tree = { classes = { [1] = { name = "Test", startNodeId = 1 } } },
+		}
+		local parsed = assert(Inputs.Parse({ generationPhase = "tree", maxAddedPoints = "20",
+			evaluationBudget = "8", seed = "37" }))
+		parsed.search.useShowNodePower = true
+		parsed.search.nodePowerStat = "CombinedDPS"
+		parsed.search.nodePowerFocusStat = "CombinedDPS"
+		local control = { cancelled = false }
+		local candidates, err, cancelled = TreeSearch.BuildCandidateNodes(spec, parsed, 20,
+			function(done, total, _expanded, _targetId, operation)
+				if operation == "Node Power distance index" and done >= 16 and total == 17 then
+					control.cancelled = true
+				end
+			end, 20, control)
+		assert.is_true(cancelled)
+		assert.is_nil(err)
+		assert.are.same({ }, candidates)
 		newBuild()
 	end)
 

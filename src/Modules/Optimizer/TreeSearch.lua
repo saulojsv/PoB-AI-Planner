@@ -14,8 +14,9 @@ local treeSearch = { }
 local routeGraphCache = setmetatable({ }, { __mode = "k" })
 local MAX_ARCHIVED_ROUTE_TARGET_ATTEMPTS = 32
 local MAX_ARCHIVED_ROUTE_VARIANTS_PER_PATTERN = 4
-local MAX_NODE_POWER_HOTSPOTS = 3
 local MAX_NODE_POWER_HOTSPOT_CHAINS = 3
+local MAX_NODE_POWER_HOTSPOT_POOL = 32
+local MAX_KEY_NODE_DISTANCE_INDEX = 768
 local timelessTypeByConqueror = {
 	vaal = 1,
 	karui = 2,
@@ -439,7 +440,87 @@ local function getSearchGraph(spec, search)
 			directedEdges = cached.edgeCount,
 		}
 	end
-	return cached.maxEdgeLength, cached.adjacency
+	return cached.maxEdgeLength, cached.adjacency, cached
+end
+
+-- Precompute hop distances between native Notables and Keystones once per
+-- immutable tree graph. The matrix orders hotspot pairs only; path filters and
+-- point budgets are still enforced by findPath for each emitted candidate.
+local function getKeyNodeDistanceIndex(spec, adjacency, graphCache, control, progressFunc)
+	local keyNodeIds = { }
+	for nodeId, node in pairs(spec and spec.nodes or { }) do
+		if node and (node.type == "Notable" or node.type == "Keystone") and not node.ascendancyName then
+			keyNodeIds[#keyNodeIds + 1] = nodeId
+		end
+	end
+	t_sort(keyNodeIds)
+	local cached = graphCache and graphCache.keyNodeDistanceIndex
+	local sameKeys = cached and #cached.nodeIds == #keyNodeIds
+	if sameKeys then
+		for index, nodeId in ipairs(keyNodeIds) do
+			if cached.nodeIds[index] ~= nodeId then sameKeys = false; break end
+		end
+	end
+	if sameKeys then return cached, "reused" end
+	if #keyNodeIds > MAX_KEY_NODE_DISTANCE_INDEX then
+		if graphCache then graphCache.keyNodeDistanceIndex = nil end
+		return nil, "key_node_limit"
+	end
+	local count = #keyNodeIds
+	local keyIndex, distances, reachablePairs = { }, { }, 0
+	for index, nodeId in ipairs(keyNodeIds) do keyIndex[nodeId] = index end
+	local queue = { }
+	for sourceIndex, sourceId in ipairs(keyNodeIds) do
+		if control and control.cancelled then return nil, "cancelled" end
+		local visited, head = { [sourceId] = 0 }, 1
+		for queueIndex = #queue, 2, -1 do queue[queueIndex] = nil end
+		queue[1] = sourceId
+		local expanded = 0
+		while head <= #queue do
+			local nodeId = queue[head]
+			head = head + 1
+			expanded = expanded + 1
+			for _, otherId in ipairs(adjacency[nodeId] or { }) do
+				local other = spec.nodes[otherId]
+				if other and not other.ascendancyName and other.type ~= "AscendClassStart"
+					and other.type ~= "Mastery" and visited[otherId] == nil then
+					visited[otherId] = visited[nodeId] + 1
+					queue[#queue + 1] = otherId
+				end
+			end
+		end
+		local rowOffset = (sourceIndex - 1) * count
+		for targetIndex, targetId in ipairs(keyNodeIds) do
+			local distance = visited[targetId]
+			if distance ~= nil then
+				distances[rowOffset + targetIndex] = distance
+				if targetIndex ~= sourceIndex then reachablePairs = reachablePairs + 1 end
+			else
+				distances[rowOffset + targetIndex] = -1
+			end
+		end
+		if progressFunc and (sourceIndex % 16 == 0 or sourceIndex == count) then
+			progressFunc(sourceIndex, count, expanded, sourceId)
+		end
+		if control and control.cancelled then return nil, "cancelled" end
+	end
+	local index = {
+		nodeIds = keyNodeIds,
+		keyIndex = keyIndex,
+		distances = distances,
+		nodeCount = count,
+		reachablePairs = reachablePairs,
+	}
+	if graphCache then graphCache.keyNodeDistanceIndex = index end
+	return index, "built"
+end
+
+local function keyNodeDistance(index, leftId, rightId)
+	local leftIndex = index and index.keyIndex[leftId]
+	local rightIndex = index and index.keyIndex[rightId]
+	if not leftIndex or not rightIndex then return nil end
+	local value = index.distances[(leftIndex - 1) * index.nodeCount + rightIndex]
+	return value and value >= 0 and value or nil
 end
 
 local function findPath(spec, seedNodes, goals, regionByNode, forbidden, allowed, blockedNodeIds, tieSeed, maxEdgeLength, control, progressFunc, progressDone, progressTotal, maxCost, inputs, nodePowerHints, adjacency)
@@ -1655,7 +1736,7 @@ function treeSearch.BuildCandidateNodes(spec, inputs, limit, progressFunc, maxAd
 	local regionByNode, partitionMetadata, regionError = suppliedRegionMap, nil, nil
 	if not regionByNode then regionByNode, partitionMetadata, regionError = treeSearch.BuildRegionMap(spec, partition) end
 	if not regionByNode then return { }, regionError or "Passive-tree regions could not be resolved" end
-	local maxEdgeLength, routeAdjacency = getSearchGraph(spec, inputs.search)
+	local maxEdgeLength, routeAdjacency, routeGraph = getSearchGraph(spec, inputs.search)
 	local pointLimit = maxAddedPoints or inputs.search.maxAddedPoints
 	local nodePowerHints = buildNodePowerRouteHints(spec, inputs)
 	local forbidden = regionSet(inputs.branch.forbidden)
@@ -1807,14 +1888,50 @@ function treeSearch.BuildCandidateNodes(spec, inputs, limit, progressFunc, maxAd
 			if left.node.type ~= right.node.type then return left.node.type == "Keystone" end
 			return left.node.id < right.node.id
 		end)
-		while #hotspots > MAX_NODE_POWER_HOTSPOTS do table.remove(hotspots) end
+		while #hotspots > MAX_NODE_POWER_HOTSPOT_POOL do table.remove(hotspots) end
 		if coverage then coverage.hotspotCandidates = #hotspots end
 		if #hotspots < 2 then return end
-		local plans = { { 1, 2 } }
-		if #hotspots >= 3 then
-			plans[#plans + 1] = { 1, 3 }
-			plans[#plans + 1] = { 1, 2, 3 }
+		local distanceIndex, distanceIndexStatus = getKeyNodeDistanceIndex(spec, routeAdjacency, routeGraph, control,
+			function(done, total, expanded, targetId)
+				if progressFunc then progressFunc(done, total, expanded, targetId, "Node Power distance index") end
+			end)
+		if distanceIndexStatus == "cancelled" then return nil, true end
+		if search.routeGraphCache then
+			search.routeGraphCache.keyNodeDistanceIndex = {
+				status = distanceIndexStatus,
+				nodes = distanceIndex and distanceIndex.nodeCount or 0,
+				reachablePairs = distanceIndex and distanceIndex.reachablePairs or 0,
+			}
 		end
+		if coverage then
+			coverage.keyNodeDistanceIndex = distanceIndexStatus
+			coverage.keyNodeCount = distanceIndex and distanceIndex.nodeCount or 0
+		end
+		local plans = { }
+		for leftIndex = 1, #hotspots - 1 do
+			for rightIndex = leftIndex + 1, #hotspots do
+				local left, right = hotspots[leftIndex], hotspots[rightIndex]
+				local distance = distanceIndex and keyNodeDistance(distanceIndex, left.node.id, right.node.id) or nil
+				if distance ~= nil or not distanceIndex then
+					local pairPower = left.utility + right.utility
+					plans[#plans + 1] = {
+						first = left,
+						second = right,
+						distance = distance,
+						power = pairPower,
+						score = pairPower / ((distance or 0) + 1),
+					}
+				end
+			end
+		end
+		t_sort(plans, function(left, right)
+			if left.score ~= right.score then return left.score > right.score end
+			if left.power ~= right.power then return left.power > right.power end
+			if left.distance ~= right.distance then return (left.distance or math.huge) < (right.distance or math.huge) end
+			if left.first.node.id ~= right.first.node.id then return left.first.node.id < right.first.node.id end
+			return left.second.node.id < right.second.node.id
+		end)
+		if #plans == 0 then return end
 		local generated = 0
 		for chainIndex = 1, math.min(#plans, MAX_NODE_POWER_HOTSPOT_CHAINS) do
 			if #candidates >= limit then break end
@@ -1827,29 +1944,37 @@ function treeSearch.BuildCandidateNodes(spec, inputs, limit, progressFunc, maxAd
 					routeSeeds[#routeSeeds + 1] = seed
 				end
 			end
+			local plan = plans[chainIndex]
+			local orderedHotspots = { plan.first, plan.second }
+			local firstDistance = tonumber(plan.first.node.pathDist)
+				or tonumber(plan.first.node.power and plan.first.node.power.distance) or 1
+			local secondDistance = tonumber(plan.second.node.pathDist)
+				or tonumber(plan.second.node.power and plan.second.node.power.distance) or 1
+			if secondDistance < firstDistance or secondDistance == firstDistance
+				and plan.second.node.id < plan.first.node.id then
+				orderedHotspots[1], orderedHotspots[2] = orderedHotspots[2], orderedHotspots[1]
+			end
 			local hotspotIds, valid = { }, true
-			for _, hotspotIndex in ipairs(plans[chainIndex]) do
-				local hotspot = hotspots[hotspotIndex] and hotspots[hotspotIndex].node
-				if hotspot then
-					hotspotIds[#hotspotIds + 1] = hotspot.id
-					if not spec.allocNodes[hotspot.id] and not nodeSet[hotspot.id] then
-						local remaining = pointLimit - #nodeIds
-						if remaining <= 0 then valid = false; break end
-						local route, _, pathStatus = findPath(spec, routeSeeds, { [hotspot.id] = hotspot },
-							regionByNode, forbidden, allowed, blockedNodeIds,
-							(inputs.search.seed + chainIndex * 104729 + hotspotIndex * 7919) % 2147483647,
-							maxEdgeLength, control, progressFunc, chainIndex, #plans,
-							remaining, inputs, nodePowerHints, routeAdjacency)
-						if pathStatus == "cancelled" then return nil, true end
-						if not route then valid = false; break end
-						for _, pathNode in ipairs(route) do
-							if not spec.allocNodes[pathNode.id] and not nodeSet[pathNode.id] then
-								nodeSet[pathNode.id] = true
-								nodeIds[#nodeIds + 1] = pathNode.id
-								if not seedSeen[pathNode.id] then
-									seedSeen[pathNode.id] = true
-									routeSeeds[#routeSeeds + 1] = pathNode
-								end
+			for _, hotspotEntry in ipairs(orderedHotspots) do
+				local hotspot = hotspotEntry.node
+				hotspotIds[#hotspotIds + 1] = hotspot.id
+				if not spec.allocNodes[hotspot.id] and not nodeSet[hotspot.id] then
+					local remaining = pointLimit - #nodeIds
+					if remaining <= 0 then valid = false; break end
+					local route, _, pathStatus = findPath(spec, routeSeeds, { [hotspot.id] = hotspot },
+						regionByNode, forbidden, allowed, blockedNodeIds,
+						(inputs.search.seed + chainIndex * 104729 + hotspot.id * 7919) % 2147483647,
+						maxEdgeLength, control, progressFunc, chainIndex, #plans,
+						remaining, inputs, nodePowerHints, routeAdjacency)
+					if pathStatus == "cancelled" then return nil, true end
+					if not route then valid = false; break end
+					for _, pathNode in ipairs(route) do
+						if not spec.allocNodes[pathNode.id] and not nodeSet[pathNode.id] then
+							nodeSet[pathNode.id] = true
+							nodeIds[#nodeIds + 1] = pathNode.id
+							if not seedSeen[pathNode.id] then
+								seedSeen[pathNode.id] = true
+								routeSeeds[#routeSeeds + 1] = pathNode
 							end
 						end
 					end
@@ -1871,6 +1996,11 @@ function treeSearch.BuildCandidateNodes(spec, inputs, limit, progressFunc, maxAd
 						routePointCost = #nodeIds,
 						routeFamily = "node_power_hotspot_chain",
 						hotspotNodeIds = hotspotIds,
+						hotspotHopDistance = plan.distance,
+						hotspotUtilityPerHop = plan.score,
+						keyNodeDistanceIndexStatus = distanceIndexStatus,
+						keyNodeDistanceIndexSize = distanceIndex and distanceIndex.nodeCount or 0,
+						keyNodeReachablePairCount = distanceIndex and distanceIndex.reachablePairs or 0,
 						label = "Show Node Power route: " .. table.concat(labels, " -> "),
 						island = chainIndex,
 					}
