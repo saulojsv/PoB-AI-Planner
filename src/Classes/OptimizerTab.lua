@@ -5238,16 +5238,26 @@ function OptimizerTabClass:OpenRoutePlanner()
 		and tostring(skillError or (skillContext and skillContext.error) or "Main Skill indisponível") or nil
 	local socketWarningText
 	if #socketRepairBlockers > 0 then
-		local warningNames = { }
-		for index, warning in ipairs(skillContext.socketWarnings or { }) do
-			if index > 3 then break end
-			warningNames[#warningNames + 1] = sanitizeDetailText(warning.group or warning.groupIndex or "grupo")
+		local selectedGroupIndex = tonumber(skillContext and (skillContext.groupIndex
+			or (skillContext.skill and skillContext.skill.groupIndex)) or (searchSkill and searchSkill.groupIndex))
+		local mainSocketBlocked, secondaryBlockerCount = false, 0
+		for _, warning in ipairs(skillContext and skillContext.socketWarnings or { }) do
+			if selectedGroupIndex and tonumber(warning.groupIndex) == selectedGroupIndex then
+				mainSocketBlocked = true
+			else
+				secondaryBlockerCount = secondaryBlockerCount + 1
+			end
 		end
-		socketWarningText = "Busca habilitada; " .. groupedNumber(#socketRepairBlockers)
-			.. " grupo(s) sem reparo físico nativo" .. (#warningNames > 0 and (": " .. table.concat(warningNames, ", ")) or "")
-			.. ". Os cálculos ficam como diagnóstico e não viram rotas aprovadas sem prova de socket/link."
+		if mainSocketBlocked then
+			socketWarningText = "Busca habilitada; a Main Skill não tem socket/link nativo legal. A busca pode propor reparos, mas só uma rota com prova exata do PoB será aprovada."
+		elseif secondaryBlockerCount > 0 then
+			socketWarningText = groupedNumber(secondaryBlockerCount)
+				.. " grupo(s) secundário(s) já têm socket/link inválido. A busca Single Skill continua; grupos secundários que já são válidos precisam continuar válidos, e os que já estão inválidos não bloqueiam a Main Skill."
+		else
+			socketWarningText = "Há grupos com socket/link pendente. A busca Single Skill exige prova nativa da Main Skill e preserva os outros links que já são válidos."
+		end
 	elseif skillContext and skillContext.socketEvidence and not skillContext.socketEvidence.valid and not socketRepair then
-		socketWarningText = "A Main Skill não tem vínculo físico nativo; a busca pode começar, mas só uma candidata que prove o socket/link será aprovada."
+		socketWarningText = "Busca habilitada; a Main Skill não tem vínculo físico nativo, e só uma candidata que prove o socket/link pelo PoB será aprovada."
 	end
 	local socketWarningDetails = { }
 	for index, warning in ipairs(skillContext and skillContext.socketWarnings or { }) do

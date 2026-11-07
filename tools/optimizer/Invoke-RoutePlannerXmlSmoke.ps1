@@ -1,7 +1,8 @@
 <#
 Run the native PoB Route Planner against one existing XML build without saving,
-exporting, applying a route, or writing route-learning observations. The search
-runs in HeadlessWrapper and candidate calculations use disposable PoB clones.
+exporting, or writing route-learning observations. Candidate calculations use
+disposable PoB clones. An optional route-application check mutates only this
+isolated HeadlessWrapper build and exits without writing the build.
 #>
 [CmdletBinding()]
 param(
@@ -18,6 +19,7 @@ param(
 	[ValidateSet('50','75','100')][string]$ConversionMinimum = '100',
 	[ValidateSet(10000,40000,100000)][int]$ProposalLimit = 10000,
 	[ValidateSet(250,500,1000,2500,5000,10000)][int]$ExactEvaluationBudget = 5000,
+	[ValidateRange(0,25)][int]$ApplyParetoIndex = 0,
 	[int[]]$DisableGroupIndex = @(),
 	[switch]$DiagnosticOnly,
 	[switch]$ForceMainGemSocketMismatch,
@@ -109,6 +111,7 @@ $packagePathLua = if ($packagedProgram) {
 $packageCPathLua = if ($packagedProgram) { './?.dll;./lua/?.dll;' } else { "./?.dll;$runtimeRootLua/?.dll;$runtimeRootLua/lua/?.dll;" }
 $diagnosticLua = if ($DiagnosticOnly) { 'true' } else { 'false' }
 $forceMainGemSocketMismatchLua = if ($ForceMainGemSocketMismatch) { 'true' } else { 'false' }
+$applyParetoIndexLua = [int]$ApplyParetoIndex
 $disableGroupLua = @($DisableGroupIndex | ForEach-Object { [int]$_ }) -join ', '
 $lua = @"
 local nativeLoadfile = loadfile
@@ -777,6 +780,33 @@ end
 assert(paretoIdentity.duplicateHashes == 0,
 	"Pareto contains duplicate native proposal identities after route composition")
 local after = Candidate.BuildSignature(build)
+local routeApplicationTest
+if $applyParetoIndexLua > 0 then
+	local route = result.paretoFront[$applyParetoIndexLua]
+	assert(route, "Requested route application test is outside the exact Pareto results")
+	local applyBefore = Candidate.BuildSignature(build)
+	local callOk, applied, applyError = pcall(Candidate.Apply, build, route)
+	if not callOk then applyError, applied = tostring(applied), false end
+	if applied then build.calcsTab:BuildOutput() end
+	local appliedSignature = Candidate.BuildSignature(build)
+	local output = build.calcsTab and build.calcsTab.mainOutput or {}
+	routeApplicationTest = {
+		index = $applyParetoIndexLua,
+		label = tostring((route.evaluation and route.evaluation.candidateLabel) or route.label or ""),
+		applied = applied == true,
+		error = applied == true and nil or tostring(applyError or "Candidate.Apply returned false"),
+		isolatedHeadlessBuild = true,
+		changedBuildSignature = applyBefore ~= appliedSignature,
+		metrics = {
+			CombinedDPS = output.CombinedDPS,
+			TotalEHP = output.TotalEHP,
+			PhysicalMaximumHitTaken = output.PhysicalMaximumHitTaken,
+			FireMaximumHitTaken = output.FireMaximumHitTaken,
+			ColdMaximumHitTaken = output.ColdMaximumHitTaken,
+			LightningMaximumHitTaken = output.LightningMaximumHitTaken,
+		},
+	}
+end
 local bestMetrics = result.bestObservedMetrics or (result.evaluation and result.evaluation.metrics) or {}
 local bestViolations = result.bestObservedViolations or {}
 local bestViolationKeys = {}
@@ -956,6 +986,7 @@ local routeReport = {status = result.status or "unknown",
 		exactFeasible = phase.archivedRoutePatterns and phase.archivedRoutePatterns.exactFeasible or 0 },
 	paretoCount = #(result.paretoFront or {}), paretoIdentity = paretoIdentity,
 	routeLabels = previewRouteLabels, routePreviews = routes,
+	routeApplicationTest = routeApplicationTest,
 	sourceBuildUnchanged = before == after, routeMemoryWritesDisabled = true,
 	completed = tab.job == nil}
 local routeReportJson = json.encode(routeReport)
@@ -968,6 +999,8 @@ if "$resultJsonPathLua" ~= "" then
 end
 assert(before == after, "Route search changed the imported source build")
 assert(tab.job == nil, "Route search exceeded its tick budget")
+assert(not routeApplicationTest or routeApplicationTest.applied,
+	"Disposable exact Pareto route application failed: " .. tostring(routeApplicationTest and routeApplicationTest.error))
 "@
 
 $oldPath = $env:PATH

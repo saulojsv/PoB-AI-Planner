@@ -832,6 +832,7 @@ describe("AI Planner combination workflow", function()
 		local mainSkill = {
 			effectId = "Metadata/Items/Gems/SkillGemCyclone",
 			gemId = "Metadata/Items/Gems/SkillGemCyclone",
+			groupIndex = 1,
 			slot = "Body Armour",
 			socketEvidence = { valid = false, status = "invalid", slot = "Body Armour", reason = "Cyclone needs G" },
 		}
@@ -861,8 +862,8 @@ describe("AI Planner combination workflow", function()
 		local popup = assert(main.popups[1])
 		assert.is_true(popup.controls.run.enabled(),
 			"socket validation belongs to exact candidate gates and must not disable structural search")
-		assert.is_truthy(popup.controls.socketWarning:GetProperty("label"):find("grupo(s) sem reparo", 1, true),
-			"the UI must say why some exact calculations can only be diagnostics")
+		assert.is_truthy(popup.controls.socketWarning:GetProperty("label"):find("grupo(s) secundário(s) já têm socket/link inválido", 1, true),
+			"the UI must explain that pre-existing secondary socket issues do not block Single Skill search")
 		main:ClosePopup(popup)
 		RoutePlanner.GetMainSkill = originalGetMainSkill
 		restorePlannerCatalogStubs = nil
@@ -875,6 +876,7 @@ describe("AI Planner combination workflow", function()
 		local mainSkill = {
 			effectId = "CycloneAltX",
 			gemId = "Metadata/Items/Gems/SkillGemCycloneAltX",
+			groupIndex = 1,
 			slot = "Body Armour",
 			socketEvidence = { valid = false, status = "invalid", slot = "Body Armour",
 				reason = "Gem Cyclone of Tumult needs a G socket but PoB item slot Body Armour has R at position 1" },

@@ -1261,6 +1261,105 @@ function catalog.ValidateEnabledSocketGroups(build, itemsTabOverride, itemSetOve
 	return #proof.violations == 0, proof
 end
 
+local function plannerSocketGroupIdentity(group)
+	if type(group) ~= "table" then return nil end
+	local gemIds = { }
+	for _, gem in ipairs(group.gemList or { }) do
+		local gemData = gem.gemData
+		gemIds[#gemIds + 1] = tostring(gem.gemId or (gemData and gemData.id) or gem.nameSpec or "")
+	end
+	return table.concat({ tostring(group.source or ""), tostring(group.sourceKind or ""),
+		tostring(group.nodeId or ""), tostring(group.slot or ""), table.concat(gemIds, ",") }, "\31")
+end
+
+-- Single-skill route planning must require the selected Main Skill's exact
+-- socket proof, while preserving every other skill group that was already
+-- playable in the source build. Pre-existing broken secondary groups remain
+-- visible diagnostics, but cannot make every unrelated Main Skill route fail.
+function catalog.ValidatePlannerSocketGroups(sourceBuild, candidateBuild, selectedGroupIndex,
+	itemsTabOverride, itemSetOverride, groupOverrides)
+	local selectedIndex = tonumber(selectedGroupIndex)
+	local proof = {
+		status = "pass",
+		scope = "single_skill_preserve_existing_links",
+		selectedGroupIndex = selectedIndex,
+		groups = { },
+		violations = { },
+		ignoredInvalidBaselineGroups = 0,
+	}
+	if not selectedIndex or selectedIndex < 1 or selectedIndex ~= math.floor(selectedIndex) then
+		proof.status = "invalid"
+		proof.violations[1] = { key = "active_skill_socket_link", label = "Selected Main Skill socket/link",
+			reason = "Single-skill route proof has no valid selected group index", deficit = 1 }
+		return false, proof
+	end
+	local _, baselineProof = catalog.ValidateEnabledSocketGroups(sourceBuild)
+	local _, candidateProof = catalog.ValidateEnabledSocketGroups(candidateBuild,
+		itemsTabOverride, itemSetOverride, groupOverrides)
+	local sourceGroups = sourceBuild and sourceBuild.skillsTab and sourceBuild.skillsTab.socketGroupList or { }
+	local candidateGroups = groupOverrides or (candidateBuild and candidateBuild.skillsTab
+		and candidateBuild.skillsTab.socketGroupList) or { }
+	local baselineByIdentity = { }
+	local baselineInvalid = { }
+	for _, entry in ipairs(baselineProof and baselineProof.groups or { }) do
+		local group = sourceGroups[tonumber(entry.groupIndex)]
+		local identity = plannerSocketGroupIdentity(group)
+		if entry.status == "linked" or entry.status == "granted_skill" then
+			if tonumber(entry.groupIndex) ~= selectedIndex and identity then
+				baselineByIdentity[identity] = entry
+			end
+		elseif tonumber(entry.groupIndex) ~= selectedIndex then
+			baselineInvalid[tonumber(entry.groupIndex)] = true
+		end
+	end
+	local candidateByIdentity = { }
+	local candidateByIndex = { }
+	for _, entry in ipairs(candidateProof and candidateProof.groups or { }) do
+		local groupIndex = tonumber(entry.groupIndex)
+		local group = groupIndex and candidateGroups[groupIndex]
+		local identity = plannerSocketGroupIdentity(group)
+		candidateByIndex[groupIndex] = entry
+		if identity then candidateByIdentity[identity] = entry end
+	end
+	local selectedEntry = candidateByIndex[selectedIndex]
+	if selectedEntry and (selectedEntry.status == "linked" or selectedEntry.status == "granted_skill") then
+		proof.groups[#proof.groups + 1] = selectedEntry
+	else
+		local reason = selectedEntry and selectedEntry.reason or "The selected Main Skill group is not active in the candidate"
+		proof.status = "invalid"
+		proof.violations[#proof.violations + 1] = {
+			key = "active_skill_socket_link",
+			label = "Selected Main Skill socket/link",
+			groupIndex = selectedIndex,
+			reason = tostring(reason),
+			deficit = 1,
+		}
+	end
+	local baselineIdentities = { }
+	for identity in pairs(baselineByIdentity) do baselineIdentities[#baselineIdentities + 1] = identity end
+	table.sort(baselineIdentities)
+	for _, identity in ipairs(baselineIdentities) do
+		local baselineEntry = baselineByIdentity[identity]
+		local candidateEntry = candidateByIdentity[identity]
+		if not candidateEntry or (candidateEntry.status ~= "linked" and candidateEntry.status ~= "granted_skill") then
+			proof.status = "invalid"
+			proof.violations[#proof.violations + 1] = {
+				key = "active_skill_socket_link",
+				label = "Previously linked secondary skill group",
+				groupIndex = baselineEntry.groupIndex,
+				group = baselineEntry.label,
+				reason = candidateEntry and candidateEntry.reason
+					or "A skill group that was linked in the source build is missing from the candidate",
+				deficit = 1,
+			}
+		else
+			proof.groups[#proof.groups + 1] = candidateEntry
+		end
+	end
+	for _ in pairs(baselineInvalid) do proof.ignoredInvalidBaselineGroups = proof.ignoredInvalidBaselineGroups + 1 end
+	return #proof.violations == 0, proof
+end
+
 -- Normalize the native group validator result for profiles and model inputs.
 -- The PoB calculation can apply a support that is not physically usable, so
 -- callers must keep calculator application separate from playability.

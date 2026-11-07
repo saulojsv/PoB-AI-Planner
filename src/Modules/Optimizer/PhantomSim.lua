@@ -4153,13 +4153,19 @@ local function run(build, parsed, control, job)
 		local evaluationItemsTab = candidateItemsTab or baseItemsTab
 		if parsed.search.routePlannerRunSpec then
 			evaluation.routePlannerSearchMode = parsed.search.routePlannerRunSpec.searchMode
-			local activeSocketGroupsValid, activeSocketProof = SkillCatalog.ValidateEnabledSocketGroups(
-				evalBuild, evaluationItemsTab, nil)
+			local activeSocketGroupsValid, activeSocketProof
+			if parsed.search.routePlannerRunSpec.searchMode == "SINGLE_SKILL_ONLY" then
+				activeSocketGroupsValid, activeSocketProof = SkillCatalog.ValidatePlannerSocketGroups(
+					build, evalBuild, targetSkill and targetSkill.groupIndex, evaluationItemsTab)
+			else
+				activeSocketGroupsValid, activeSocketProof = SkillCatalog.ValidateEnabledSocketGroups(
+					evalBuild, evaluationItemsTab, nil)
+			end
 			evaluation.routePlannerSocketProofs = activeSocketProof
 			if not activeSocketGroupsValid then
 				for _, violation in ipairs(activeSocketProof.violations or { }) do
 					-- The selected Main Skill has its own strict binding check below;
-					-- report other active groups here without duplicating that violation.
+					-- report secondary groups here without duplicating that violation.
 					if not targetSkill or tonumber(violation.groupIndex) ~= tonumber(targetSkill.groupIndex) then
 						evaluation.feasible = false
 						evaluation.normalizedDeficit = (evaluation.normalizedDeficit or 0) + (violation.deficit or 1)

@@ -1152,7 +1152,7 @@ function candidate.Apply(build, resultCandidate)
 			end
 		end
 	end
-	if (generationPhase == "equipment" or generationPhase == "combined")
+	if (generationPhase == "equipment" or generationPhase == "combined") and not singleSkillPlannerResult
 		and (resultCandidate.requiresSocketedMainSkill == true or socketBinding ~= nil) then
 		local storedProof = resultCandidate.evaluation and resultCandidate.evaluation.skillGroupSockets
 		if type(storedProof) ~= "table" or storedProof.status ~= "pass" or type(storedProof.groups) ~= "table" then
@@ -1216,11 +1216,24 @@ function candidate.Apply(build, resultCandidate)
 			data = build.data,
 			spec = build.spec,
 		}
-		local groupsValid, currentProof = SkillCatalog.ValidateEnabledSocketGroups(
-			validationBuild, validationItemsTab, finalGearSet, groupList)
+		local groupsValid, currentProof
+		if singleSkillPlannerResult then
+			local selectedGroupIndex = tonumber(resultCandidate.evaluation.skillSocket
+				and resultCandidate.evaluation.skillSocket.groupIndex)
+				or tonumber(storedProof.selectedGroupIndex)
+			if storedProof.scope ~= "single_skill_preserve_existing_links"
+				or not selectedGroupIndex or tonumber(storedProof.selectedGroupIndex) ~= selectedGroupIndex then
+				return false, "The exact Single Skill route proof is missing its selected Main Skill or baseline-link scope"
+			end
+			groupsValid, currentProof = SkillCatalog.ValidatePlannerSocketGroups(
+				build, validationBuild, selectedGroupIndex, validationItemsTab, finalGearSet, groupList)
+		else
+			groupsValid, currentProof = SkillCatalog.ValidateEnabledSocketGroups(
+				validationBuild, validationItemsTab, finalGearSet, groupList)
+		end
 		if not groupsValid then
 			local first = currentProof.violations and currentProof.violations[1]
-			return false, "An active skill group no longer matches PoB's native item sockets: "
+			return false, "A required AI Planner skill group no longer matches PoB's native item sockets: "
 				.. tostring(first and first.reason or "socket/link validation failed")
 		end
 		local storedByIndex = { }
