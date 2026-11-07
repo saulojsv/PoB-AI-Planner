@@ -632,6 +632,51 @@ foreach ($entry in $manifest.builds) {
 				continue
 			}
 			$code = [string]$embeddedCodes[0].inlineCode
+		} elseif ($providerId -eq 'PoBKR') {
+			# PoB KR post pages are HTML, not raw PoB exports. Select only the
+			# explicitly labeled full Web PoB link; the separate /edit#build link
+			# is a simplified variant and must not be mixed into the archive.
+			$sourceHtml = [string]$result.Content
+			$canonicalCodes = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+			$anchorPattern = '(?is)<a\b[^>]*href=(?:"(?<q>[^"]+)"|''(?<s>[^'']+)'')[^>]*>(?<body>.*?)</a\s*>'
+			foreach ($anchor in [regex]::Matches($sourceHtml, $anchorPattern)) {
+				$href = if ($anchor.Groups['q'].Success) { $anchor.Groups['q'].Value } else { $anchor.Groups['s'].Value }
+				$href = [Net.WebUtility]::HtmlDecode($href.Trim())
+				$hrefMatch = [regex]::Match($href, '^(?:https?://pob\.co\.kr)?/pob#build=(?<code>eN[A-Za-z0-9+/_-]{254,16777214}={0,2})$')
+				if (-not $hrefMatch.Success) { continue }
+				$anchorText = [Net.WebUtility]::HtmlDecode(($anchor.Groups['body'].Value -replace '(?is)<[^>]+>', ' ')).Trim()
+				if ($anchorText -notmatch '(?i)웹\s*PoB로\s*열기') { continue }
+				$null = $canonicalCodes.Add($hrefMatch.Groups['code'].Value)
+			}
+			if ($canonicalCodes.Count -eq 0) {
+				# Some posts publish the full export in their page state instead of
+				# a direct /pob link. Accept that fallback only when the existing
+				# parser finds exactly one distinct PoB code in the selected page.
+				$fallbackPage = Get-PoBImportCandidatesFromHtml -Html $sourceHtml -PageUrl $codeUrl -PageTitle ([string]$entry.title)
+				$fallbackCodes = @($fallbackPage.Candidates | Where-Object { $_.providerId -eq 'ManualInlineCode' })
+				foreach ($fallbackCode in $fallbackCodes) {
+					$null = $canonicalCodes.Add([string]$fallbackCode.inlineCode)
+				}
+			}
+			if ($canonicalCodes.Count -ne 1) {
+				$ambiguityStatus = if ($canonicalCodes.Count -eq 0) { 'no_inline_code' } else { 'ambiguous_inline_codes' }
+				$ambiguityMessage = 'PoB KR post skipped without selecting a full export; expected exactly one labeled Web PoB code and found ' + $canonicalCodes.Count + ' for ' + $entry.id
+				$downloadEvidence.Add([pscustomobject]@{
+					providerId = $provider.providerId; host = $provider.rawHost; id = $entry.id
+					title = $entry.title; creator = $entry.creator; locale = $entry.locale
+					sourceUrl = $entry.sourceUrl; claimedPatch = $entry.claimedPatch
+					reference = $reference; requestUrl = $codeUrl; status = $ambiguityStatus
+					codeBytes = 0; codeSha256 = $null; codePath = $null; httpStatus = $status
+					inlineCodeCount = $canonicalCodes.Count; error = $ambiguityMessage
+				})
+				Write-LatestIngestionResult $entry 'ambiguous_source_skipped' $ambiguityMessage
+				$ingestionProgress.processedCount++
+				$ingestionProgress.ambiguousSourceCount++
+				$ingestionProgress.stage = 'ambiguous_source_skipped'
+				Write-IngestionProgress
+				continue
+			}
+			$code = @($canonicalCodes)[0]
 		} else {
 			$code = $result.Content.Trim()
 		}
