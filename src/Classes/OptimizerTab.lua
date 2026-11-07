@@ -2182,9 +2182,14 @@ function OptimizerTabClass.FormatResultDetails(tab, viewWidth, selectedRoute)
 		if type(nodePowerCoverage) == "table" then
 			local nodePowerStat = metricDisplayName(nodePowerCoverage.stat or "")
 			if nodePowerCoverage.status == "used" then
+				local routePath = nodePowerCoverage.routePath
+				local routePathText = type(routePath) == "table" and routePath.status == "available"
+					and (" Native marginal values also break equal-point path ties across "
+						.. tostring(routePath.hintedNodes or 0) .. " eligible nodes.") or ""
 				add("Show Node Power: native " .. nodePowerStat .. " guided target order for "
 					.. tostring(nodePowerCoverage.prioritizedTargets or 0) .. " of "
-					.. tostring(nodePowerCoverage.targets or 0) .. " legal targets. It did not replace exact route metrics or gates.", "^8", 13)
+					.. tostring(nodePowerCoverage.targets or 0) .. " legal targets."
+					.. routePathText .. " Exact PoB metrics and gates remain authoritative.", "^8", 13)
 			else
 				add("Show Node Power: not used for ranking" .. (nodePowerCoverage.reason and (" — " .. tostring(nodePowerCoverage.reason)) or "."), "^8", 13)
 			end

@@ -2504,8 +2504,23 @@ local function run(build, parsed, control, job)
 	end
 	-- Keep add-only routes inside PoB's native level/quest point ceiling by
 	-- pairing them with connected, low-value leaf removals when the tree is full.
-	treeCandidates, treeBudgetCoverage = treeSearch.BudgetCandidatesForPointLimit(
-		build.spec, treeCandidates or { }, parsed, totalPointLimit, candidateRegionMap)
+	if phase.nodePotentialAnalysis then
+		-- The node-potential page is a read-only route review. Preserve routes that
+		-- exceed the current level/quest ceiling so the native structural validator
+		-- can report them as not evaluated with PoB's exact point-limit blocker.
+		-- Ordinary optimization still pairs removals or drops routes before scoring.
+		treeBudgetCoverage = {
+			inputCandidates = #(treeCandidates or { }),
+			outputCandidates = #(treeCandidates or { }),
+			adjustedCandidates = 0,
+			rejectedInsufficientRemovals = 0,
+			requiredPointsFreed = 0,
+			status = "node_potential_structural_review",
+		}
+	else
+		treeCandidates, treeBudgetCoverage = treeSearch.BudgetCandidatesForPointLimit(
+			build.spec, treeCandidates or { }, parsed, totalPointLimit, candidateRegionMap)
+	end
 	treeBudgetCoverage.pointLimit = totalPointLimit
 	treeBudgetCoverage.pointLimitLevel = pointLimitLevel
 	treeBudgetCoverage.levelAutoMode = build.characterLevelAutoMode == true
@@ -3932,10 +3947,6 @@ local function run(build, parsed, control, job)
 				reason = "Above strict maximum",
 			}
 		end
-		if branchValid and candidatePointCount > totalPointLimit then
-			branchValid = false
-			branchError = string.format("Candidate uses %d passive points, above PoB's current limit of %d", candidatePointCount, totalPointLimit)
-		end
 		local candidateLevelPointLimit = getPassivePointLimit(build, candidateLevel, extraPoints)
 		if branchValid and candidatePointCount > candidateLevelPointLimit then
 			branchValid = false
@@ -3948,6 +3959,10 @@ local function run(build, parsed, control, job)
 				deficit = candidatePointCount - candidateLevelPointLimit,
 				reason = "Above PoB's native level and act-quest point limit",
 			}
+		end
+		if branchValid and candidatePointCount > totalPointLimit then
+			branchValid = false
+			branchError = string.format("Candidate uses %d passive points, above PoB's current limit of %d", candidatePointCount, totalPointLimit)
 		end
 		if not branchValid then
 			phaseCoverage.structuralCandidateRejections = phaseCoverage.structuralCandidateRejections + 1

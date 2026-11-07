@@ -128,6 +128,88 @@ describe("AI Planner exact node-potential review", function()
 		assert.is_true(parsed.search.nodePowerCoverage.prioritizedTargets > 0)
 	end)
 
+	it("uses matching native marginal Node Power to choose an equal-cost route connector", function()
+		newBuild()
+		local start = { id = 1, type = "ClassStart", alloc = true, x = 0, y = 0, linked = { } }
+		local left = { id = 2, type = "Normal", alloc = false, x = 1, y = 0, linked = { } }
+		local right = { id = 3, type = "Normal", alloc = false, x = 0, y = 1, linked = { } }
+		local target = { id = 4, type = "Notable", alloc = false, x = 1, y = 1, linked = { } }
+		local function connect(first, second)
+			first.linked[#first.linked + 1] = second
+			second.linked[#second.linked + 1] = first
+		end
+		connect(start, left)
+		connect(left, target)
+		connect(start, right)
+		connect(right, target)
+		local spec = {
+			nodes = { [1] = start, [2] = left, [3] = right, [4] = target },
+			allocNodes = { [1] = start },
+			tree = { classes = { [1] = { name = "Test", startNodeId = 1 } } },
+		}
+		local parsed = assert(Inputs.Parse({ generationPhase = "tree", maxAddedPoints = "2",
+			evaluationBudget = "8", seed = "17" }))
+		parsed.targetNodeIds = { target.id }
+		local function firstPath(inputs)
+			local candidates, err = TreeSearch.BuildCandidateNodes(spec, inputs, 8, nil, 2)
+			assert.is_truthy(candidates and candidates[1], err)
+			assert.are.equal(2, candidates[1].routePointCost)
+			return candidates[1]
+		end
+		local baseline = firstPath(parsed)
+		local baselineConnector = baseline.nodeIds[1] == target.id and baseline.nodeIds[2] or baseline.nodeIds[1]
+		local preferredConnector = baselineConnector == left.id and right or left
+		preferredConnector.power = { singleStat = 1000 }
+		parsed.search.useShowNodePower = true
+		parsed.search.nodePowerStat = "CombinedDPS"
+		parsed.search.nodePowerFocusStat = "CombinedDPS"
+		local powered = firstPath(parsed)
+		local usedPreferredConnector = powered.nodeIds[1] == preferredConnector.id
+			or powered.nodeIds[2] == preferredConnector.id
+		assert.is_true(usedPreferredConnector,
+			"the matching native marginal Node Power should break a shortest-path tie")
+		assert.are.equal("used", parsed.search.nodePowerCoverage.status)
+		assert.are.equal("available", parsed.search.nodePowerCoverage.routePath.status)
+		assert.are.equal(1, parsed.search.nodePowerCoverage.routePath.hintedNodes)
+
+		left.power, right.power = nil, nil
+		for nodeId = 100, 229 do
+			local leaf = { id = nodeId, type = "Normal", alloc = false, x = nodeId, y = 2, linked = { } }
+			spec.nodes[nodeId] = leaf
+			connect(start, leaf)
+		end
+		local broadParsed = assert(Inputs.Parse({ generationPhase = "tree", maxAddedPoints = "2",
+			evaluationBudget = "8", seed = "17" }))
+		local function broadRouteToTarget(inputs)
+			local candidates, err = TreeSearch.BuildCandidateNodes(spec, inputs, 32, nil, 2)
+			assert.is_truthy(candidates, err)
+			for _, candidate in ipairs(candidates) do
+				if candidate.targetId == target.id then return candidate end
+			end
+			return nil
+		end
+		local broadBaseline = assert(broadRouteToTarget(broadParsed),
+			"the shared route field should retain the requested Notable as a target")
+		local broadBaselineConnector = broadBaseline.nodeIds[1] == target.id
+			and broadBaseline.nodeIds[2] or broadBaseline.nodeIds[1]
+		local broadPreferred = broadBaselineConnector == left.id and right or left
+		broadPreferred.power = { singleStat = 1000 }
+		broadParsed.search.useShowNodePower = true
+		broadParsed.search.nodePowerStat = "CombinedDPS"
+		broadParsed.search.nodePowerFocusStat = "CombinedDPS"
+		local broadPowered = assert(broadRouteToTarget(broadParsed))
+		assert.is_true(broadPowered.nodeIds[1] == broadPreferred.id or broadPowered.nodeIds[2] == broadPreferred.id,
+			"the shared path field should use native marginal power to choose an equal-cost connector")
+		assert.are.equal(2, broadPowered.routePointCost)
+
+		parsed.search.nodePowerFocusStat = "TotalEHP"
+		local mismatched = firstPath(parsed)
+		assert.are.same(baseline.nodeIds, mismatched.nodeIds,
+			"a cache for another stat must not guide the route")
+		assert.are.equal("unavailable", parsed.search.nodePowerCoverage.routePath.status)
+		newBuild()
+	end)
+
 	it("feeds bounded imported graph evidence into the ordinary Run action", function()
 		newBuild()
 		local seed, seedError = SkillSeed.Create(build, "Metadata/Items/Gems/SkillGemFireball")
@@ -424,11 +506,16 @@ describe("AI Planner exact node-potential review", function()
 		local signature = Candidate.BuildSignature(build)
 		local ok, jobOrError = tab:RunNodePotential()
 		assert.is_true(ok, tostring(jobOrError))
-		local frames = 0
+		local frames, frameLimit = 0, 1000
 		while tab.job and tab.job.status == "running" do
 			tab:Tick()
 			frames = frames + 1
-			assert.is_true(frames < 1000, "point-limit analysis did not finish")
+			local progress = tab.job and tab.job.progress or { }
+			frameLimit = math.min(5000, math.max(frameLimit,
+				math.ceil((tonumber(progress.total) or 0) / 8) + 256))
+			assert.is_true(frames < frameLimit, "point-limit analysis did not finish: phase="
+				.. tostring(progress.phase) .. ", processed=" .. tostring(progress.processed)
+				.. ", total=" .. tostring(progress.total) .. ", current=" .. tostring(progress.current))
 		end
 		local result = tab.nodePotentialResult
 		assert.is_truthy(result, "blocked route review should still produce a result")
@@ -437,7 +524,13 @@ describe("AI Planner exact node-potential review", function()
 		for _, route in ipairs(result.results or { }) do
 			if route.exactCalculated == false then blockedRoute = route break end
 		end
-		assert.is_truthy(blockedRoute, "the native level/quest point limit should block all new routes at level 1")
+		local firstResult = result.results and result.results[1]
+		assert.is_truthy(blockedRoute, "the native level/quest point limit should block all new routes at level 1"
+			.. "; rows=" .. tostring(#(result.results or { }))
+			.. ", first=" .. tostring(firstResult and firstResult.label)
+			.. ", firstExact=" .. tostring(firstResult and firstResult.exactCalculated)
+			.. ", firstReason=" .. tostring(firstResult and firstResult.reason)
+			.. ", status=" .. tostring(result.status))
 		assert.is_truthy(blockedRoute.reason and blockedRoute.reason:find("level 1 limit", 1, true),
 			"the route should retain PoB's exact structural blocker")
 		assert.is_false(blockedRoute.feasible)
