@@ -903,11 +903,9 @@ function OptimizerTabClass.FormatGuidedWorkflow(tab, readiness)
 	end
 	if type(result) ~= "table" then
 		local values = tab and tab.textValues or { }
-		local routeControl = tab and tab.controls and tab.controls.overviewRoutes
 		local routeReady = readiness and readiness.skill and readiness.skill.status == "resolved"
-		if routeControl and type(routeControl.enabled) == "function" then routeReady = routeControl.enabled() end
 		if not routeReady then
-			return { "Selecione uma Main Skill e uma gema alvo válidas para habilitar Gerar rotas." }
+			return { "Selecione uma Main Skill válida na aba Skills. Gerar rotas continua acessível para mostrar o diagnóstico." }
 		end
 		local readinessLabel = readiness and readiness.label
 		if readinessLabel == "Blocked" or readinessLabel == "Indisponível" then
@@ -2976,11 +2974,12 @@ function OptimizerTabClass:OptimizerTab(build)
 	self.controls.overviewRoutes = new("ButtonControl"):ButtonControl({ "TOPLEFT", self, "TOPLEFT" }, { 236, 240, 132, 22 }, DisplayText.Native("Gerar rotas"), function()
 		self:OpenRoutePlanner()
 	end)
-	self.controls.overviewRoutes.enabled = function()
-		return self.controls.overviewRun and type(self.controls.overviewRun.enabled) == "function"
-			and self.controls.overviewRun.enabled()
-	end
-	self.controls.overviewRoutes.tooltipText = "Gera rotas a partir desta build, recalcula cada proposta no PoB e mostra só rotas aprovadas ou propostas exatas com os déficits identificados. Nada é aplicado automaticamente."
+	-- Route generation has its own native Main Skill preflight in OpenRoutePlanner.
+	-- Do not gate this entry point on the separate Matrix optimizer's target gem:
+	-- that can strand a perfectly usable loaded build outside the route dialog,
+	-- where the user would otherwise receive a precise socket/skill diagnostic.
+	self.controls.overviewRoutes.enabled = function() return true end
+	self.controls.overviewRoutes.tooltipText = "Abre o combinador da build carregada. O próprio Planner valida a Main Skill e os sockets; não exige selecionar outra gema na Matrix. Cada rota é recalculada pelo PoB, e nada é aplicado automaticamente."
 	self.controls.overviewAdvanced = new("ButtonControl"):ButtonControl({ "TOPLEFT", self, "TOPLEFT" }, { 12, 268, 132, 22 }, DisplayText.Native("Opções avançadas"), function() self:OpenBuildDirection() end)
 	self.controls.overviewAdvanced.shown = false
 	self.controls.overviewRefresh = new("ButtonControl"):ButtonControl({ "TOPLEFT", self, "TOPLEFT" }, { 152, 268, 164, 22 }, DisplayText.Native("Atualizar detalhes"), function() self:RefreshReadiness(true) end)
@@ -5418,16 +5417,17 @@ function OptimizerTabClass:OpenRoutePlanner()
 		controls.blockingReason = addLabel("blockingReason", blockingReason or skillError or "Main Skill indisponível",
 			28, 108, 840, 42, 12)
 		controls.blockingReason.tooltipText = blockingReason
+		local blockingPopup
 		controls.fixSkills = new("ButtonControl"):ButtonControl(popupAnchor, { 28, 164, 220, 24 },
 			DisplayText.Native("Abrir aba Skills para corrigir"), function()
-				main:ClosePopup()
+				main:ClosePopup(blockingPopup)
 				self.build.viewMode = "SKILLS"
 				self.statusMessage = "Corrija os sockets ou desative a inclusão inválida em Full DPS; depois reabra Combinações."
 			end)
 		controls.fixSkills.tooltipText = "Abre a aba Skills para corrigir a Main Skill, os sockets ou sua inclusão em Full DPS."
 		controls.close = new("ButtonControl"):ButtonControl(popupAnchor, { 744, 164, 108, 24 },
 			DisplayText.Native("Fechar"), function() main:ClosePopup() end)
-		main:OpenPopup(900, 214, DisplayText.Native("AI Planner — build bloqueada"), controls,
+		blockingPopup = main:OpenPopup(900, 214, DisplayText.Native("AI Planner — build bloqueada"), controls,
 			"fixSkills", "close", "close")
 		return
 	end

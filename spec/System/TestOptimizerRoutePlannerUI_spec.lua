@@ -182,10 +182,15 @@ describe("AI Planner combination workflow", function()
 		tab.RefreshOverviewDirectionControls(true)
 		assert.is_true(tab.overviewSkillHasOptions,
 			"the route-first overview should expose an unambiguous native gem when a legal socket repair exists")
-		assert.is_true(tab.controls.overviewRun.enabled(),
-			"the selected raw gem must keep the overview's combination entry point active")
+		-- The loaded Main Skill is enough for the Route Planner. Clearing the
+		-- independent Matrix optimizer target must not hide its entry point.
+		tab.textValues.targetSkillGroupIndex = ""
+		tab.textValues.targetSkillIndex = ""
+		tab.textValues.targetSkillGemId = ""
+		assert.is_false(tab.controls.overviewRun.enabled(),
+			"the generic Matrix optimizer still requires its own target gem")
 		assert.is_true(tab.controls.overviewRoutes.enabled(),
-			"the overview route button must open the repairable combination flow")
+			"the overview route button must open the repairable combination flow independently of Matrix selections")
 		tab:OpenRoutePlanner()
 		local popup = assert(main.popups[1])
 		assert.is_true(popup.controls.run.enabled(),

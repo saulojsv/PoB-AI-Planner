@@ -162,7 +162,7 @@
 	<File name="Classes/ModStore.lua" part="program" sha1="2ea68071ac22ddc942b6cba23ea1c69182b7833d" />
 	<File name="Classes/NotableDBControl.lua" part="program" sha1="339502f47fff51beefd40d275076ded7635f927e" />
 	<File name="Classes/NotesTab.lua" part="program" sha1="7f339836f6a597f6e64237a3d8036efda685b358" />
-	<File name="Classes/OptimizerTab.lua" part="program" sha1="7422dea5763f68f151387df01275918275e8d6a0" />
+	<File name="Classes/OptimizerTab.lua" part="program" sha1="dc5e8ca6863a9e467b4772df72dd86d9ba6c0714" />
 	<File name="Classes/OptimizerTab.lua.before-approved-attack-scope-20261028-022330Z.bak" part="program" sha1="b05bdda64a594c57500e9e6b84b271584031b2ad" />
 	<File name="Classes/OptimizerTab.lua.before-paired-review-history-dashboard-20261025.bak" part="program" sha1="e8701583ba4652244f03e239c248c3cf01e61b23" />
 	<File name="Classes/PartyTab.lua" part="program" sha1="a6711d37e5f877d1de410bdf538681b02dad798c" />

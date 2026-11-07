@@ -207,10 +207,16 @@ describe("AI Planner guided overview flow", function()
 		local tab = build.optimizerTab
 		tab.RefreshOverviewDirectionControls(true)
 		assert.is_false(tab.controls.overviewRun.enabled(), "a gem alone must not imply a linked Main Skill slot")
-		assert.is_false(tab.controls.overviewRoutes.enabled(), "route generation must wait for an active Main Skill")
+		assert.is_true(tab.controls.overviewRoutes.enabled(),
+			"the route entry point must remain available so its native preflight can explain the missing Main Skill")
 		local missingSkill = table.concat(OptimizerTab.FormatGuidedWorkflow(tab, BuildReadiness.Evaluate(build)), "\n")
 		assert.is_truthy(missingSkill:find("Selecione uma Main Skill", 1, true), missingSkill)
 		assert.is_nil(missingSkill:find("Pronto para gerar", 1, true), missingSkill)
+		tab:OpenRoutePlanner()
+		assert.is_false(main.popups[1].controls.run.enabled(),
+			"the route action itself must stay disabled when PoB has no resolvable active skill")
+		assert.is_truthy(main.popups[1].controls.skill:GetProperty("label"):find("Main Skill bloqueada", 1, true))
+		main:ClosePopup()
 		build.skillsTab:PasteSocketGroup("Fireball 1/0 1")
 		build.mainSocketGroup = 1
 		build.skillsTab.socketGroupList[1].mainActiveSkill = 1
@@ -2437,7 +2443,9 @@ describe("Optimizer Matrix responsive layout", function()
 		popup.controls.applyRoute:Click()
 		tab.ApplyCandidate = originalApply
 		assert.are.equal(alternative, appliedCandidate, "Apply must dispatch the explicitly selected route")
-		assert.is_nil(main.popups[1], "the result popup closes before applying a route as a variation")
+		assert.are.equal(popup, main.popups[1], "successful application feedback remains visible until the user closes the result")
+		assert.is_truthy(popup.controls.applyFeedback:GetProperty("label"):find("Rota 3 aplicada como variação reversível", 1, true))
+		main:ClosePopup(popup)
 		newBuild()
 	end)
 
