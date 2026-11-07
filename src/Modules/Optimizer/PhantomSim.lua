@@ -2034,6 +2034,8 @@ local function summarizeExactNearMiss(build, candidate, evaluation, objective)
 		violations[#violations + 1] = {
 			key = tostring(violation.key or violation.label or "hard_gate"),
 			label = tostring(violation.label or violation.key or "Hard requirement"),
+			groupIndex = tonumber(violation.groupIndex),
+			group = type(violation.group) == "string" and violation.group or nil,
 			reason = tostring(violation.reason or "Exact hard gate not met"):sub(1, 180),
 			actual = isFinite(violation.actual) and violation.actual or nil,
 			required = isFinite(violation.required) and violation.required or nil,

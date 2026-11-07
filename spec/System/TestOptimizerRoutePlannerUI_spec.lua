@@ -587,13 +587,19 @@ describe("AI Planner combination workflow", function()
 		local originalConnect = GNNIPC.Connect
 		local originalManifestFingerprint = launch.manifestFingerprint
 		local originalManifestFingerprintStatus = launch.manifestFingerprintStatus
+		local originalVersionBranch = launch.versionBranch
 		launch.manifestFingerprint = string.rep("a", 64)
 		launch.manifestFingerprintStatus = "available"
+		-- The catalog correctly refuses to compare packages when the running
+		-- PoB branch is unknown. Give this compatibility test a complete engine
+		-- fingerprint instead of depending on the contract runner's launch mode.
+		launch.versionBranch = "stable"
 		restorePlannerCatalogStubs = function()
 			RoutePlanner.GetMainSkill = originalGetMainSkill
 			GNNIPC.Connect = originalConnect
 			launch.manifestFingerprint = originalManifestFingerprint
 			launch.manifestFingerprintStatus = originalManifestFingerprintStatus
+			launch.versionBranch = originalVersionBranch
 		end
 		local skill = { effectId = "IceSpear", gemId = "Metadata/Items/Gems/SkillGemIceSpear",
 			slot = "Body Armour", socketEvidence = { status = "linked", socketCount = 6 } }

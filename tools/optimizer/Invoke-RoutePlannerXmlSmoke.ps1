@@ -871,6 +871,7 @@ for index, violation in ipairs(bestViolations) do
 	bestViolationKeys[#bestViolationKeys + 1] = tostring(violation.key or violation.label or "hard_gate")
 	bestViolationDetails[#bestViolationDetails + 1] = {
 		key = tostring(violation.key or ""), label = tostring(violation.label or ""),
+		groupIndex = violation.groupIndex, group = violation.group,
 		reason = tostring(violation.reason or ""), actual = violation.actual,
 		required = violation.required, deficit = violation.deficit,
 	}
@@ -891,6 +892,7 @@ for index, nearMiss in ipairs(nearMisses) do
 		violationKeys[#violationKeys + 1] = tostring(violation.key or violation.label or "hard_gate")
 		violationDetails[#violationDetails + 1] = {
 			key = tostring(violation.key or ""), label = tostring(violation.label or ""),
+			groupIndex = violation.groupIndex, group = violation.group,
 			reason = tostring(violation.reason or ""), actual = violation.actual,
 			required = violation.required, deficit = violation.deficit,
 		}

@@ -1210,12 +1210,21 @@ function candidate.Apply(build, resultCandidate)
 		local validationItemsTab = gearValidationTab or build.itemsTab
 		local validationSkillsTab = preparedSet or build.skillsTab
 		local groupList = validationSkillsTab and validationSkillsTab.socketGroupList or { }
+		if not preparedSet then
+			groupList = copyTable(groupList, true)
+			validationSkillsTab = shallowCopy(validationSkillsTab or build.skillsTab)
+			if build.skillsTab then setmetatable(validationSkillsTab, getmetatable(build.skillsTab)) end
+			validationSkillsTab.socketGroupList = groupList
+		end
 		local validationBuild = {
 			skillsTab = validationSkillsTab,
 			itemsTab = validationItemsTab,
 			data = build.data,
 			spec = build.spec,
 		}
+		local rebound, rebindError = SkillCatalog.RebindPlannerGrantedSkillGroups(
+			validationBuild, storedProof, validationItemsTab, finalGearSet, groupList)
+		if not rebound then return false, rebindError end
 		local groupsValid, currentProof
 		if singleSkillPlannerResult then
 			local selectedGroupIndex = tonumber(resultCandidate.evaluation.skillSocket
@@ -1254,7 +1263,7 @@ function candidate.Apply(build, resultCandidate)
 				return false, "The exact AI Planner socket proof is missing active group " .. tostring(liveEntry.groupIndex)
 			end
 			for _, key in ipairs({ "status", "slot", "itemId", "firstSocketIndex", "socketCount", "linkGroup",
-				"sourceKind", "nodeId" }) do
+				"sourceKind", "nodeId", "source", "skillId" }) do
 				if stored.group[key] ~= nil and stored.group[key] ~= liveEntry.group[key] then
 					return false, "The exact AI Planner socket proof changed before Apply (group "
 						.. tostring(liveEntry.groupIndex) .. ", " .. key .. ")"
@@ -1515,7 +1524,8 @@ function candidate.Apply(build, resultCandidate)
 		end
 		t_insert(appliedKinds, "equipment-set variation")
 	end
-	if socketBinding and build.skillsTab and type(build.skillsTab.UpdateSocketGroups) == "function" then
+	if (socketBinding or next(gearOverrides) ~= nil) and build.skillsTab
+		and type(build.skillsTab.UpdateSocketGroups) == "function" then
 		build.skillsTab:UpdateSocketGroups()
 	end
 	-- Exact evaluation may use a higher (or lower) Auto level because the

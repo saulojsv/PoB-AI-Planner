@@ -767,6 +767,8 @@ local function validateGrantedSkillGroup(build, group, groupIndex, itemsTabOverr
 					groupIndex = groupIndex,
 					slot = slotName,
 					itemId = itemId,
+					source = source,
+					skillId = skillId,
 				}
 			end
 		end
@@ -792,6 +794,91 @@ local function validateGrantedSkillGroup(build, group, groupIndex, itemsTabOverr
 		return true, { status = "granted_skill", sourceKind = "explode", groupIndex = groupIndex }
 	end
 	return false, "The PoB-granted skill source is not recognized by the native build model"
+end
+
+-- Candidate.Apply validates the exact route against a disposable equipment set
+-- before changing the user's active build. Item-granted skill groups in that
+-- preflight must point at the candidate's equipped item, not the source build's
+-- item object. Rebind only from the exact socket proof and PoB's native grant
+-- table; the normal socket validator still performs the final certification.
+function catalog.RebindPlannerGrantedSkillGroups(build, proof, itemsTabOverride, itemSetOverride, groupOverrides)
+	if type(proof) ~= "table" or type(proof.groups) ~= "table" or type(groupOverrides) ~= "table" then
+		return false, "The exact planner socket proof or candidate skill groups are unavailable"
+	end
+	local itemsTab = itemsTabOverride or (build and build.itemsTab)
+	local itemSet = itemSetOverride or (itemsTab and (itemsTab.activeItemSet
+		or itemsTab.itemSets and itemsTab.itemSets[itemsTab.activeItemSetId]))
+	if not itemsTab or not itemSet then
+		return false, "The candidate item set is unavailable for granted-skill rebinding"
+	end
+	for _, entry in ipairs(proof.groups) do
+		local detail = entry and entry.group
+		if entry and entry.status == "granted_skill" and type(detail) == "table"
+			and detail.sourceKind == "item" then
+			local groupIndex = tonumber(entry.groupIndex or detail.groupIndex)
+			local itemId = tonumber(detail.itemId)
+			local slotName = detail.slot
+			local source = detail.source
+			local skillId = detail.skillId
+			if not groupIndex or groupIndex < 1 or groupIndex ~= math.floor(groupIndex)
+				or not itemId or itemId < 1 or itemId ~= math.floor(itemId)
+				or type(slotName) ~= "string" or slotName == ""
+				or type(source) ~= "string" or not source:match("^Item:")
+				or type(skillId) ~= "string" or skillId == "" then
+				return false, "The exact item-granted skill proof is missing its native item, slot, source, or skill identity"
+			end
+			local slot = itemsTab.slots and itemsTab.slots[slotName]
+			if not slot or slot.nodeId then
+				return false, "The exact item-granted skill proof points to an unsupported or unavailable jewel slot"
+			end
+			local equipped = itemSet[slotName]
+			if tonumber(equipped and equipped.selItemId) ~= itemId then
+				return false, "The exact item-granted skill proof no longer matches the candidate equipment slot"
+			end
+			local item = itemsTab.items and itemsTab.items[itemId]
+			if not item or item.modSource ~= source or type(item.grantedSkills) ~= "table" then
+				return false, "The exact item-granted skill proof no longer matches PoB's native item data"
+			end
+			local nativeGrant
+			for _, grant in ipairs(item.grantedSkills) do
+				if grant.source == source and grant.skillId == skillId then
+					nativeGrant = grant
+					break
+				end
+			end
+			if not nativeGrant then
+				return false, "The candidate item no longer grants the exact skill certified by PoB"
+			end
+			while #groupOverrides < groupIndex do
+				groupOverrides[#groupOverrides + 1] = { enabled = false, slotEnabled = false, gemList = { } }
+			end
+			local group = groupOverrides[groupIndex]
+			if type(group) ~= "table" then
+				group = { }
+				groupOverrides[groupIndex] = group
+			end
+			local gem = group.gemList and group.gemList[1] or { }
+			local gemId = build and build.data and build.data.gemForSkill and build.data.gemForSkill[skillId]
+			local gemData = gemId and build.data.gems and build.data.gems[gemId]
+			local skillData = build and build.data and build.data.skills and build.data.skills[skillId]
+			gem.skillId = skillId
+			gem.gemId = gemData and gemData.id or gem.gemId
+			gem.nameSpec = (gemData and gemData.name) or (skillData and skillData.name) or gem.nameSpec
+			gem.gemData = gemData or gem.gemData
+			gem.grantedEffect = (gemData and gemData.grantedEffect) or skillData or gem.grantedEffect
+			gem.fromItem = true
+			gem.enabled = true
+			group.gemList = { gem }
+			group.source = source
+			group.sourceItem = item
+			group.sourceNode = nil
+			group.slot = slotName
+			group.enabled = true
+			group.slotEnabled = true
+			group.noSupports = nativeGrant.noSupports
+		end
+	end
+	return true
 end
 
 -- Candidate calculations run in CALCULATOR mode, which computes the exact
@@ -1268,8 +1355,13 @@ local function plannerSocketGroupIdentity(group)
 		local gemData = gem.gemData
 		gemIds[#gemIds + 1] = tostring(gem.gemId or (gemData and gemData.id) or gem.nameSpec or "")
 	end
-	return table.concat({ tostring(group.source or ""), tostring(group.sourceKind or ""),
-		tostring(group.nodeId or ""), tostring(group.slot or ""), table.concat(gemIds, ",") }, "\31")
+	-- PoB rebuilds item- and tree-granted groups while applying equipment and
+	-- passive variants. Their source references can legitimately change even
+	-- when the same playable group remains. Match the stable gameplay identity:
+	-- assigned equipment slot plus ordered gem IDs. Callers retain duplicate
+	-- identities as separate entries so two source groups cannot collapse into
+	-- one proof.
+	return table.concat({ tostring(group.slot or ""), table.concat(gemIds, ",") }, "\31")
 end
 
 -- Single-skill route planning must require the selected Main Skill's exact
@@ -1306,7 +1398,8 @@ function catalog.ValidatePlannerSocketGroups(sourceBuild, candidateBuild, select
 		local identity = plannerSocketGroupIdentity(group)
 		if entry.status == "linked" or entry.status == "granted_skill" then
 			if tonumber(entry.groupIndex) ~= selectedIndex and identity then
-				baselineByIdentity[identity] = entry
+				baselineByIdentity[identity] = baselineByIdentity[identity] or { }
+				baselineByIdentity[identity][#baselineByIdentity[identity] + 1] = entry
 			end
 		elseif tonumber(entry.groupIndex) ~= selectedIndex then
 			baselineInvalid[tonumber(entry.groupIndex)] = true
@@ -1319,7 +1412,10 @@ function catalog.ValidatePlannerSocketGroups(sourceBuild, candidateBuild, select
 		local group = groupIndex and candidateGroups[groupIndex]
 		local identity = plannerSocketGroupIdentity(group)
 		candidateByIndex[groupIndex] = entry
-		if identity then candidateByIdentity[identity] = entry end
+		if identity then
+			candidateByIdentity[identity] = candidateByIdentity[identity] or { }
+			candidateByIdentity[identity][#candidateByIdentity[identity] + 1] = entry
+		end
 	end
 	local selectedEntry = candidateByIndex[selectedIndex]
 	if selectedEntry and (selectedEntry.status == "linked" or selectedEntry.status == "granted_skill") then
@@ -1339,21 +1435,31 @@ function catalog.ValidatePlannerSocketGroups(sourceBuild, candidateBuild, select
 	for identity in pairs(baselineByIdentity) do baselineIdentities[#baselineIdentities + 1] = identity end
 	table.sort(baselineIdentities)
 	for _, identity in ipairs(baselineIdentities) do
-		local baselineEntry = baselineByIdentity[identity]
-		local candidateEntry = candidateByIdentity[identity]
-		if not candidateEntry or (candidateEntry.status ~= "linked" and candidateEntry.status ~= "granted_skill") then
-			proof.status = "invalid"
-			proof.violations[#proof.violations + 1] = {
-				key = "active_skill_socket_link",
-				label = "Previously linked secondary skill group",
-				groupIndex = baselineEntry.groupIndex,
-				group = baselineEntry.label,
-				reason = candidateEntry and candidateEntry.reason
-					or "A skill group that was linked in the source build is missing from the candidate",
-				deficit = 1,
-			}
-		else
-			proof.groups[#proof.groups + 1] = candidateEntry
+		local candidateEntries = candidateByIdentity[identity] or { }
+		for _, baselineEntry in ipairs(baselineByIdentity[identity]) do
+			local candidateIndex
+			for index, entry in ipairs(candidateEntries) do
+				if entry.status == "linked" or entry.status == "granted_skill" then
+					candidateIndex = index
+					break
+				end
+			end
+			candidateIndex = candidateIndex or (#candidateEntries > 0 and 1 or nil)
+			local candidateEntry = candidateIndex and table.remove(candidateEntries, candidateIndex) or nil
+			if not candidateEntry or (candidateEntry.status ~= "linked" and candidateEntry.status ~= "granted_skill") then
+				proof.status = "invalid"
+				proof.violations[#proof.violations + 1] = {
+					key = "active_skill_socket_link",
+					label = "Previously linked secondary skill group",
+					groupIndex = baselineEntry.groupIndex,
+					group = baselineEntry.label,
+					reason = candidateEntry and candidateEntry.reason
+						or "A skill group that was linked in the source build is missing from the candidate",
+					deficit = 1,
+				}
+			else
+				proof.groups[#proof.groups + 1] = candidateEntry
+			end
 		end
 	end
 	for _ in pairs(baselineInvalid) do proof.ignoredInvalidBaselineGroups = proof.ignoredInvalidBaselineGroups + 1 end
