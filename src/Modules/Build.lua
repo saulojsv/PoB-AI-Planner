@@ -61,7 +61,7 @@ local function matchFlags(reqFlags, notFlags, flags)
 	return true
 end
 
-function buildMode:Init(dbFileName, buildName, buildXML, convertBuild, importLink)
+function buildMode:Init(dbFileName, buildName, buildXML, convertBuild, importLink, archivedSeedPlannerPreferences)
 	self.dbFileName = dbFileName
 	self.buildName = buildName
 	self.importLink = importLink
@@ -476,6 +476,10 @@ function buildMode:Init(dbFileName, buildName, buildXML, convertBuild, importLin
 		self.viewMode = "COMPARE"
 	end)
 	self.controls.modeCompare.locked = function() return self.viewMode == "COMPARE" end
+	self.controls.modeOptimizer = new("ButtonControl"):ButtonControl({"LEFT",self.controls.modeCompare,"RIGHT"}, {4, 0, 100, 20}, "AI Planner", function()
+		self.viewMode = "OPTIMIZER"
+	end)
+	self.controls.modeOptimizer.locked = function() return self.viewMode == "OPTIMIZER" end
 	-- Skills
 	self.controls.mainSkillLabel = new("LabelControl"):LabelControl({"TOPLEFT",self.anchorSideBar,"TOPLEFT"}, {0, 80, 300, 16}, "^7Main Skill:")
 	self.controls.mainSocketGroup = new("DropDownControl"):DropDownControl({"TOPLEFT",self.controls.mainSkillLabel,"BOTTOMLEFT"}, {0, 2, 300, 18}, nil, function(index, value)
@@ -613,6 +617,7 @@ function buildMode:Init(dbFileName, buildName, buildXML, convertBuild, importLin
 	self.treeTab = new("TreeTab"):TreeTab(self)
 	self.skillsTab = new("SkillsTab"):SkillsTab(self)
 	self.calcsTab = new("CalcsTab"):CalcsTab(self)
+	self.optimizerTab = new("OptimizerTab"):OptimizerTab(self)
 	self.controls.breakdown = new("CalcBreakdownControl"):CalcBreakdownControl(self.calcsTab)
 	self.controls.breakdown.pinnedColour = hexToRGB(colorCodes.CUSTOM) or error("failed to set breakdown pin colour")
 	self.controls.breakdown.envName = "mainEnv"
@@ -635,6 +640,7 @@ function buildMode:Init(dbFileName, buildName, buildXML, convertBuild, importLin
 		["Items"] = self.itemsTab,
 		["Skills"] = self.skillsTab,
 		["Calcs"] = self.calcsTab,
+		["Optimizer"] = self.optimizerTab,
 		["Import"] = self.importTab,
 	}
 	self.legacyLoaders = { -- Special loaders for legacy sections
@@ -689,6 +695,15 @@ function buildMode:Init(dbFileName, buildName, buildXML, convertBuild, importLin
 
 	-- reprocess socket groups as they might depend on items which don't necessarily load first.
 	self.skillsTab:UpdateSocketGroups()
+	-- Optimizer inputs are bound to the loaded native class/tree/Main Skill. Finalize
+	-- only after all item/skill sets have been reconciled into their active sockets.
+	if self.optimizerTab and self.optimizerTab.FinalizeBuildContext then
+		self.optimizerTab:FinalizeBuildContext()
+	end
+	if archivedSeedPlannerPreferences and self.optimizerTab
+		and type(self.optimizerTab.ApplyArchivedSeedPreferences) == "function" then
+		self.optimizerTab:ApplyArchivedSeedPreferences(archivedSeedPlannerPreferences)
+	end
 	-- Build calculation output tables
 	wipeGlobalCache()
 	self.outputRevision = 1
@@ -766,6 +781,29 @@ local acts = {
 local function actExtra(act, extra)
 	-- Act 2 : Deal With The Bandits (+1 if the player kills all bandits)
 	return act > 2 and extra or 0
+end
+
+function buildMode:GetEstimatedLevelForPoints(pointsUsed, extra)
+	local usedMax = 99 + 23 + (extra or 0)
+	local level, act = 1, 0
+	repeat
+		act = act + 1
+		level = m_min(m_max(pointsUsed + 1 - acts[act].questPoints - actExtra(act, extra or 0), acts[act].level), 100)
+	until act == 11 or level <= acts[act + 1].level
+	return level, act, usedMax
+end
+
+-- Return the passive points available at an explicit character level using
+-- PoB's same act-boundary quest-point table and bandit extra-point value.
+function buildMode:GetPassivePointLimitForLevel(characterLevel, extra)
+	local level = tonumber(characterLevel) or 1
+	level = math.floor(m_min(m_max(level, 1), 100))
+	local act = 1
+	for nextAct = 2, #acts do
+		if level < acts[nextAct].level then break end
+		act = nextAct
+	end
+	return math.max(0, level - 1 + acts[act].questPoints + actExtra(act, extra or 0)), act
 end
 
 function buildMode:SyncLoadouts()
@@ -899,13 +937,8 @@ function buildMode:EstimatePlayerProgress()
 	if self.spec then
 		local PointsUsed, AscUsed, SecondaryAscUsed = self.spec:CountAllocNodes()
 		local extra = self.calcsTab.mainOutput and self.calcsTab.mainOutput.ExtraPoints or 0
-		local usedMax, ascMax, secondaryAscMax, level, act = 99 + 23 + extra, 8, 8, 1, 0
-
-		-- Find estimated act and level based on points used
-		repeat
-			act = act + 1
-			level = m_min(m_max(PointsUsed + 1 - acts[act].questPoints - actExtra(act, extra), acts[act].level), 100)
-		until act == 11 or level <= acts[act + 1].level
+		local level, act, usedMax = self:GetEstimatedLevelForPoints(PointsUsed, extra)
+		local ascMax, secondaryAscMax = 8, 8
 
 		if self.characterLevelAutoMode and self.characterLevel ~= level then
 			self.characterLevel = level
@@ -1108,6 +1141,7 @@ function buildMode:ResetModFlags()
 	self.skillsTab.modFlag = false
 	self.itemsTab.modFlag = false
 	self.calcsTab.modFlag = false
+	self.optimizerTab.modFlag = false
 end
 
 function buildMode:UpdateSecondaryAscendancyDropdown(forceListUpdate)
@@ -1203,6 +1237,8 @@ function buildMode:OnFrame(inputEvents)
 					self.viewMode = "NOTES"
 				elseif event.key == "7" then
 					self.viewMode = "PARTY"
+				elseif event.key == "8" then
+					self.viewMode = "OPTIMIZER"
 				end
 			end
 		end
@@ -1289,6 +1325,10 @@ function buildMode:OnFrame(inputEvents)
 
 	-- Update contents of main skill dropdowns
 	self:RefreshSkillSelectControls(self.controls, self.mainSocketGroup, "")
+	-- Run optimizer jobs once per app frame even when the AI Planner tab is hidden.
+	-- Every resume yields after one pathfinding slice or exact PoB calculation.
+	self.optimizerTab:Tick()
+
 	-- Draw contents of current tab
 	local sideBarWidth = 312
 	local tabViewPort = {
@@ -1313,6 +1353,8 @@ function buildMode:OnFrame(inputEvents)
 		self.itemsTab:Draw(tabViewPort, inputEvents)
 	elseif self.viewMode == "CALCS" then
 		self.calcsTab:Draw(tabViewPort, inputEvents)
+	elseif self.viewMode == "OPTIMIZER" then
+		self.optimizerTab:Draw(tabViewPort, inputEvents)
 	elseif self.viewMode == "COMPARE" then
 		self.compareTab:Draw(tabViewPort, inputEvents)
 	end
@@ -1324,7 +1366,7 @@ function buildMode:OnFrame(inputEvents)
 		end
 	end
 
-	self.unsaved = self.modFlag or self.notesTab.modFlag or self.partyTab.modFlag or self.configTab.modFlag or self.treeTab.modFlag or self.treeTab.searchFlag or self.spec.modFlag or self.skillsTab.modFlag or self.itemsTab.modFlag or self.calcsTab.modFlag
+	self.unsaved = self.modFlag or self.notesTab.modFlag or self.partyTab.modFlag or self.configTab.modFlag or self.treeTab.modFlag or self.treeTab.searchFlag or self.spec.modFlag or self.skillsTab.modFlag or self.itemsTab.modFlag or self.calcsTab.modFlag or self.optimizerTab.modFlag
 
 	SetDrawLayer(5)
 

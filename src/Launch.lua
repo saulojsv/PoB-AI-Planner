@@ -8,6 +8,18 @@
 local startTime = GetTime()
 APP_NAME = "Path of Building"
 
+local function managedReleaseMarkerPresent()
+	if type(GetScriptPath) ~= "function" then return false end
+	local scriptPath, scriptFallback = GetScriptPath()
+	local root = type(scriptPath) == "string" and scriptPath ~= "" and scriptPath or nil
+	if not root and type(scriptFallback) == "string" and scriptFallback ~= "" then root = scriptFallback end
+	root = root or "."
+	local marker = io.open(root .. "/AIPlannerManaged.release", "rb")
+	if not marker then return false end
+	marker:close()
+	return true
+end
+
 SetWindowTitle(APP_NAME)
 ConExecute("set vid_mode 8")
 ConExecute("set vid_resizable 3")
@@ -21,6 +33,7 @@ collectgarbage("setpause", 400)
 function launch:OnInit()
 	self.devMode = false
 	self.installedMode = false
+	self.managedRelease = managedReleaseMarkerPresent()
 	self.versionNumber = "?"
 	self.versionBranch = "?"
 	self.versionPlatform = "?"
@@ -28,7 +41,7 @@ function launch:OnInit()
 	self.subScripts = { }
 	self.startTime = startTime
 	local firstRunFile = io.open("first.run", "r")
-	if firstRunFile then
+	if firstRunFile and not self.managedRelease then
 		firstRunFile:close()
 		os.remove("first.run")
 		-- This is a fresh installation
@@ -42,6 +55,8 @@ function launch:OnInit()
 			self:ApplyUpdate(updateMode)
 			return
 		end
+	elseif firstRunFile then
+		firstRunFile:close()
 	end
 	local xml = require("xml")
 	local localManXML = xml.LoadXMLFile("manifest.xml") or xml.LoadXMLFile("../manifest.xml")
@@ -56,6 +71,15 @@ function launch:OnInit()
 			end
 		end
 	end
+	local manifestFingerprint, manifestIdentity = require("Modules.Optimizer.Version").ManifestFingerprint(localManXML)
+	self.manifestInventoryFingerprint = manifestFingerprint
+	self.manifestInventoryFingerprintFormat = manifestIdentity and manifestIdentity.format or nil
+	self.manifestFingerprint = nil
+	self.manifestFingerprintStatus = manifestFingerprint and "pending" or "unavailable"
+	self.manifestFingerprintFormat = nil
+	self.manifestFingerprintFileCount = 0
+	self.manifestFingerprintByteCount = 0
+	self.manifestFingerprintError = nil
 	if localManXML and not self.versionBranch and not self.versionPlatform then
 		-- Looks like a remote manifest, so we're probably running from a repository
 		-- Enable dev mode to disable updates and set user path to be the script path
@@ -68,6 +92,53 @@ function launch:OnInit()
 	end
 	RenderInit("DPI_AWARE")
 	ConPrintf("Loading main script...")
+	if manifestFingerprint then
+		local scriptRoot = type(GetScriptPath) == "function" and GetScriptPath() or nil
+		local runtimeRoot = type(GetRuntimePath) == "function" and GetRuntimePath() or nil
+		local repoRoot = type(scriptRoot) == "string" and scriptRoot:gsub("[/\\]+$", ""):gsub("[/\\]src$", "") or nil
+		local scanStarted = false
+		if type(scriptRoot) == "string" and scriptRoot ~= "" and type(runtimeRoot) == "string" and runtimeRoot ~= "" and repoRoot and repoRoot ~= "" then
+			local ok, ContentFingerprint = pcall(require, "Modules.Optimizer.ContentFingerprint")
+			if ok and type(ContentFingerprint) == "table" then
+				local workerId, detail = ContentFingerprint.Start(localManXML, {
+					default = repoRoot, program = scriptRoot, runtime = runtimeRoot,
+				}, manifestFingerprint, function(contentHash, status, fileCount, byteCount, reason)
+					self.manifestFingerprintJobId = nil
+					self.manifestFingerprintFileCount = tonumber(fileCount) or 0
+					self.manifestFingerprintByteCount = tonumber(byteCount) or 0
+					if status == "verified" and type(contentHash) == "string" and #contentHash == 64 and contentHash:match("^%x+$") then
+						self.manifestFingerprint = contentHash:lower()
+						self.manifestFingerprintStatus = "verified"
+						self.manifestFingerprintFormat = "pob-calculation-content-v1"
+						self.manifestFingerprintError = nil
+					else
+						self.manifestFingerprint = nil
+						self.manifestFingerprintStatus = status == "mismatch" and "mismatch" or "unavailable"
+						self.manifestFingerprintFormat = nil
+						self.manifestFingerprintError = type(reason) == "string" and reason:sub(1, 180) or "content_fingerprint_failed"
+					end
+				end, function(errorMessage)
+					self.manifestFingerprintJobId = nil
+					self.manifestFingerprint = nil
+					self.manifestFingerprintStatus = "unavailable"
+					self.manifestFingerprintFormat = nil
+					self.manifestFingerprintError = type(errorMessage) == "string" and errorMessage:sub(1, 180) or "content_fingerprint_worker_failed"
+				end)
+				if workerId then
+					self.manifestFingerprintJobId = workerId
+					self.manifestFingerprintFileCount = tonumber(detail) or 0
+					scanStarted = true
+				else
+					self.manifestFingerprintStatus = "unavailable"
+					self.manifestFingerprintError = type(detail) == "string" and detail:sub(1, 180) or "content_fingerprint_start_failed"
+				end
+			end
+		end
+		if not scanStarted then
+			self.manifestFingerprintStatus = "unavailable"
+			self.manifestFingerprintError = self.manifestFingerprintError or "content_fingerprint_paths_unavailable"
+		end
+	end
 	local errMsg
 	errMsg, self.main = PLoadModule("Modules/Main")
 	if errMsg then
@@ -81,7 +152,7 @@ function launch:OnInit()
 		end
 	end
 
-	if not self.devMode and not firstRunFile then
+	if not self.devMode and not self.managedRelease and not firstRunFile then
 		-- Run a background update check if developer mode is off
 		self:CheckForUpdate(true)
 	end
@@ -134,7 +205,7 @@ function launch:OnFrame()
 		DrawString(0, screenH/2, "CENTER", 24, "FIXED", self.doRestart)
 		Restart()
 	end
-	if not self.devMode and (GetTime() - self.lastUpdateCheck) > 1000*60*60*12 then
+	if not self.devMode and not self.managedRelease and (GetTime() - self.lastUpdateCheck) > 1000*60*60*12 then
 		-- Do an update check every 12 hours if the user keeps the program open
 		self:CheckForUpdate(true)
 	end
@@ -157,7 +228,7 @@ function launch:OnKeyDown(key, doubleClick)
 			profiling = true
 		end
 	elseif key == "u" and IsKeyDown("CTRL") then
-		if not self.devMode then
+		if not self.devMode and not self.managedRelease then
 			self:CheckForUpdate()
 		end
 	elseif key == "PRINTSCREEN" and IsKeyDown("CTRL") then
@@ -216,6 +287,11 @@ function launch:OnSubError(id, errMsg)
 		if errMsg then
 			self:ShowErrMsg("In download callback: %s", errMsg)
 		end
+	elseif self.subScripts[id].type == "CUSTOM" and self.subScripts[id].errorCallback then
+		local callbackError = PCall(self.subScripts[id].errorCallback, errMsg)
+		if callbackError then
+			self:ShowErrMsg("In subscript callback: %s", callbackError)
+		end
 	end
 	self.subScripts[id] = nil
 end
@@ -258,10 +334,20 @@ end
 ---@param params? table @ params = { header, body }
 function launch:DownloadPage(url, callback, params)
 	params = params or {}
+	local maxResponseBytes = params.maxResponseBytes
+	if type(maxResponseBytes) ~= "number" or maxResponseBytes ~= maxResponseBytes
+		or maxResponseBytes == math.huge or maxResponseBytes == -math.huge
+		or maxResponseBytes < 1 or maxResponseBytes > 67108864
+		or maxResponseBytes ~= math.floor(maxResponseBytes) then
+		maxResponseBytes = nil
+	end
+	local followRedirects = params.followRedirects ~= false and not params.forceTLS
 	local script = [[
-		local url, requestHeader, requestBody, connectionProtocol, proxyURL, noSSL = ...
+		local url, requestHeader, requestBody, connectionProtocol, proxyURL, noSSL, forceTLS, maxResponseBytes, followRedirects = ...
 		local responseHeader = ""
-		local responseBody = ""
+		local responseBodyParts = { }
+		local responseBodyBytes = 0
+		local responseTooLarge = false
 		ConPrintf("Downloading page at: %s", url)
 		local curl = require("lcurl.safe")
 		local easy = curl.easy()
@@ -275,7 +361,8 @@ function launch:DownloadPage(url, callback, params)
 		easy:setopt_url(url)
 		easy:setopt(curl.OPT_USERAGENT, "Path of Building/]]..self.versionNumber..[[")
 		easy:setopt(curl.OPT_ACCEPT_ENCODING, "")
-		easy:setopt(curl.OPT_FOLLOWLOCATION, 1)
+		-- Authenticated ChatGPT calls must never forward a bearer token across redirects.
+		easy:setopt(curl.OPT_FOLLOWLOCATION, followRedirects and 1 or 0)
 		if requestBody then
 			easy:setopt(curl.OPT_POST, true)
 			easy:setopt(curl.OPT_POSTFIELDS, requestBody)
@@ -286,7 +373,10 @@ function launch:DownloadPage(url, callback, params)
 		if proxyURL then
 			easy:setopt(curl.OPT_PROXY, proxyURL)
 		end
-		if noSSL then
+		if forceTLS then
+			easy:setopt(curl.OPT_SSL_VERIFYPEER, 1)
+			easy:setopt(curl.OPT_SSL_VERIFYHOST, 2)
+		elseif noSSL then
 			easy:setopt(curl.OPT_SSL_VERIFYPEER, 0)
 			easy:setopt(curl.OPT_SSL_VERIFYHOST, 0)
 		end
@@ -295,14 +385,23 @@ function launch:DownloadPage(url, callback, params)
 			return true
 		end)
 		easy:setopt_writefunction(function(data)
-			responseBody = responseBody .. data
+			local nextSize = responseBodyBytes + #data
+			if maxResponseBytes and nextSize > maxResponseBytes then
+				responseTooLarge = true
+				return false
+			end
+			responseBodyBytes = nextSize
+			responseBodyParts[#responseBodyParts + 1] = data
 			return true
 		end)
 		local _, error = easy:perform()
 		local code = easy:getinfo(curl.INFO_RESPONSE_CODE)
 		easy:close()
+		local responseBody = table.concat(responseBodyParts)
 		local errMsg
-		if error then
+		if responseTooLarge then
+			errMsg = "Response exceeded maximum allowed size"
+		elseif error then
 			errMsg = error:msg()
 		elseif code ~= 200 then
 			errMsg = "Response code: "..code
@@ -312,7 +411,7 @@ function launch:DownloadPage(url, callback, params)
 		ConPrintf("Download complete. Status: %s", errMsg or "OK")
 		return responseBody, errMsg, responseHeader
 	]]
-	local id = LaunchSubScript(script, "", "ConPrintf", url, params.header, params.body, self.connectionProtocol, self.proxyURL, self.noSSL or false)
+	local id = LaunchSubScript(script, "", "ConPrintf", url, params.header, params.body, self.connectionProtocol, self.proxyURL, self.noSSL or false, params.forceTLS or false, maxResponseBytes, followRedirects)
 	if id then
 		self.subScripts[id] = {
 			type = "DOWNLOAD",
@@ -321,6 +420,7 @@ function launch:DownloadPage(url, callback, params)
 			end
 		}
 	end
+	return id
 end
 function launch:ApplyUpdate(mode)
 	if mode == "basic" then
@@ -337,6 +437,10 @@ function launch:ApplyUpdate(mode)
 end
 
 function launch:CheckForUpdate(inBackground)
+	if self.managedRelease or managedReleaseMarkerPresent() then
+		self.managedRelease = true
+		return false
+	end
 	if self.updateCheckRunning then
 		return
 	end

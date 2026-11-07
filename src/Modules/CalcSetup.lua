@@ -1073,6 +1073,7 @@ function calcs.initEnv(build, mode, override, specEnv)
 						source = "Item",
 						sourceItem = item,
 						sourceSlot = slotName,
+						Level = item.requirements.level,
 						Str = item.requirements.strMod,
 						Dex = item.requirements.dexMod,
 						Int = item.requirements.intMod,
@@ -1645,6 +1646,8 @@ function calcs.initEnv(build, mode, override, specEnv)
 								appliesToGrantedSkills = value and value.appliesToGrantedSkills,
 								quality = 0,
 								enabled = true,
+								origin = value and "item_granted" or "imbued",
+								sourceSlot = value and groupCfg.slotName or nil,
 							}, targetList, env.mode)
 						end
 					end
@@ -1688,6 +1691,8 @@ function calcs.initEnv(build, mode, override, specEnv)
 								socketQuality = gemInstance.matchesSocket and data.misc.MatchingSocketQualityBonus or 0,
 								srcInstance = gemInstance,
 								gemData = gemInstance.gemData,
+								origin = "socketed_gem",
+								sourceSlot = groupCfg.slotName,
 								superseded = false,
 								isSupporting = { },
 							}
@@ -1845,6 +1850,7 @@ function calcs.initEnv(build, mode, override, specEnv)
 							t_insert(env.requirementsTableGems, {
 								source = "Gem",
 								sourceGem = gemInstance,
+								Level = gemInstance.reqLevel,
 								Str = gemInstance.reqOverride or gemInstance.reqStr,
 								Dex = gemInstance.reqOverride or gemInstance.reqDex,
 								Int = gemInstance.reqOverride or gemInstance.reqInt,
@@ -1884,6 +1890,11 @@ function calcs.initEnv(build, mode, override, specEnv)
 						activeSkillIndex = group.mainActiveSkillCalcs
 					else
 						activeSkillIndex = m_min(#socketGroupSkillList, group.mainActiveSkill or 1)
+						if group.optimizerRequestedMainSkillIndex ~= nil then
+							-- Isolated progression audits need PoB to expose whether the
+							-- requested skill index was clamped to a different active skill.
+							group.optimizerResolvedMainSkillIndex = activeSkillIndex
+						end
 						if env.mode == "MAIN" then
 							group.mainActiveSkill = activeSkillIndex
 						end

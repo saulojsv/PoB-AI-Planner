@@ -3,6 +3,10 @@
 -- This wrapper allows the program to run headless on any OS (in theory)
 -- It can be run using a standard lua interpreter, although LuaJIT is preferable
 
+-- HeadlessWrapper only advances one frame during startup. Do not publish the
+-- desktop MCP endpoint from this process; it cannot service requests afterward.
+_G.__POB_HEADLESS_MODE = true
+
 -- define global SimpleGraphic API functions. some of these have dummy function
 -- bodies intended for headless use.
 dofile("_SimpleGraphic.def.lua")
@@ -57,8 +61,8 @@ function newBuild()
 	__mainObject__.main:SetMode("BUILD", false, "Help, I'm stuck in Path of Building!")
 	runCallback("OnFrame")
 end
-function loadBuildFromXML(xmlText, name)
-	__mainObject__.main:SetMode("BUILD", false, name or "", xmlText)
+function loadBuildFromXML(xmlText, name, convertBuild)
+	__mainObject__.main:SetMode("BUILD", false, name or "", xmlText, convertBuild == true)
 	runCallback("OnFrame")
 end
 function loadBuildFromJSON(characterJSON)

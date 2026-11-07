@@ -19,6 +19,10 @@ local m_modf = math.modf
 local m_huge = math.huge
 local s_format = string.format
 
+local function isFinite(value)
+	return type(value) == "number" and value == value and value ~= m_huge and value ~= -m_huge
+end
+
 local tempTable1 = { }
 
 local isElemental = { Fire = true, Cold = true, Lightning = true }
@@ -3509,6 +3513,13 @@ function calcs.buildDefenceEstimations(env, actor)
 			output.NetLifeRegen = output.NetLifeRegen - totalLifeDegen
 			output.NetManaRegen = output.NetManaRegen - totalManaDegen
 			output.NetEnergyShieldRegen = output.NetEnergyShieldRegen - totalEnergyShieldDegen
+			-- Exact long-run activity baseline: regen minus persistent build
+			-- degen, without recoup or hit recovery. The separate comprehensive
+			-- display below may include average recoup, which is not a perpetual
+			-- resource source for optimizer certification.
+			output.OptimizerNetLifeRegen = output.NetLifeRegen - (output.LifeLossLostAvg or 0)
+			output.OptimizerNetManaRegen = output.NetManaRegen
+			output.OptimizerNetEnergyShieldRegen = output.NetEnergyShieldRegen
 			output.TotalNetRegen = output.NetLifeRegen + output.NetManaRegen + output.NetEnergyShieldRegen
 			if breakdown then
 				t_insert(breakdown.NetLifeRegen, s_format("%.1f ^8(total life regen)", output.LifeRegenRecovery))
@@ -3751,6 +3762,10 @@ function calcs.buildDefenceEstimations(env, actor)
 				output.ComprehensiveNetLifeRegen = output.ComprehensiveNetLifeRegen + (output.LifeRecoupRecoveryAvg or 0) - totalLifeDegen - (output.LifeLossLostAvg or 0)
 				output.ComprehensiveNetManaRegen = output.ComprehensiveNetManaRegen + (output.ManaRecoupRecoveryAvg or 0) - totalManaDegen
 				output.ComprehensiveNetEnergyShieldRegen = output.ComprehensiveNetEnergyShieldRegen + (output.EnergyShieldRecoupRecoveryAvg or 0) - totalEnergyShieldDegen
+				-- Keep a recoup-free exact baseline for optimizer activity tests.
+				output.OptimizerNetLifeRegen = output.LifeRegenRecovery - totalLifeDegen - (output.LifeLossLostAvg or 0)
+				output.OptimizerNetManaRegen = output.ManaRegenRecovery - totalManaDegen
+				output.OptimizerNetEnergyShieldRegen = output.EnergyShieldRegenRecovery - totalEnergyShieldDegen
 				output.ComprehensiveTotalNetRegen = output.ComprehensiveNetLifeRegen + output.ComprehensiveNetManaRegen + output.ComprehensiveNetEnergyShieldRegen
 				if breakdown then
 					t_insert(breakdown.ComprehensiveNetLifeRegen, s_format("%.1f ^8(total life regen)", output.LifeRegenRecovery))
@@ -3783,6 +3798,18 @@ function calcs.buildDefenceEstimations(env, actor)
 				end
 			end
 		end
+	end
+	-- When no persistent damage-over-time is configured, PoB has no Net*Regen
+	-- field because gross regen equals net regen. Keep the optimizer-facing
+	-- output explicit, while subtracting any ongoing life loss already modeled.
+	if not isFinite(output.OptimizerNetLifeRegen) then
+		output.OptimizerNetLifeRegen = (output.LifeRegenRecovery or 0) - (output.LifeLossLostAvg or 0)
+	end
+	if not isFinite(output.OptimizerNetManaRegen) then
+		output.OptimizerNetManaRegen = output.ManaRegenRecovery or 0
+	end
+	if not isFinite(output.OptimizerNetEnergyShieldRegen) then
+		output.OptimizerNetEnergyShieldRegen = output.EnergyShieldRegenRecovery or 0
 	end
 
 	--region Add breakdown to enemy incoming damage

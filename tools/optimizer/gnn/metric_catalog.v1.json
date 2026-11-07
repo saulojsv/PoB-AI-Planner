@@ -1,0 +1,172 @@
+{
+  "schema": "pob-ai-planner-metric-catalog",
+  "schemaVersion": 1,
+  "authority": "Path of Building native exact calculation",
+  "resistUnit": "percentage_points",
+  "metrics": {
+    "CombinedDPS": {
+      "unit": "damage_per_second",
+      "direction": "higher_is_better",
+      "scope": "Selected active skill group; Single Skill label source."
+    },
+    "FullDPS": {
+      "unit": "damage_per_second",
+      "direction": "higher_is_better",
+      "scope": "Native included groups; Cross-Skill label source."
+    },
+    "TotalEHP": {
+      "unit": "effective_hit_points",
+      "direction": "higher_is_better",
+      "scope": "Exact PoB configuration and scenario."
+    },
+    "PhysicalMaximumHitTaken": {
+      "unit": "damage",
+      "direction": "higher_is_better",
+      "scope": "Native physical maximum-hit calculation."
+    },
+    "FireMaximumHitTaken": {
+      "unit": "damage",
+      "direction": "higher_is_better",
+      "scope": "Native fire maximum-hit calculation."
+    },
+    "ColdMaximumHitTaken": {
+      "unit": "damage",
+      "direction": "higher_is_better",
+      "scope": "Native cold maximum-hit calculation."
+    },
+    "LightningMaximumHitTaken": {
+      "unit": "damage",
+      "direction": "higher_is_better",
+      "scope": "Native lightning maximum-hit calculation."
+    },
+    "FireResist": {
+      "unit": "percentage_points",
+      "direction": "constraint",
+      "scope": "Effective fire resistance; compare with the selected RunSpec gate."
+    },
+    "ColdResist": {
+      "unit": "percentage_points",
+      "direction": "constraint",
+      "scope": "Effective cold resistance; compare with the selected RunSpec gate."
+    },
+    "LightningResist": {
+      "unit": "percentage_points",
+      "direction": "constraint",
+      "scope": "Effective lightning resistance; compare with the selected RunSpec gate."
+    },
+    "ChaosResist": {
+      "unit": "percentage_points",
+      "direction": "constraint",
+      "scope": "Effective chaos resistance; compare with the selected RunSpec gate."
+    },
+    "FireResistOverCap": {
+      "unit": "percentage_points",
+      "direction": "constraint",
+      "scope": "Native fire overcap value for STRATEGY_OVERCAP_30_ALL."
+    },
+    "ColdResistOverCap": {
+      "unit": "percentage_points",
+      "direction": "constraint",
+      "scope": "Native cold overcap value for STRATEGY_OVERCAP_30_ALL."
+    },
+    "LightningResistOverCap": {
+      "unit": "percentage_points",
+      "direction": "constraint",
+      "scope": "Native lightning overcap value for STRATEGY_OVERCAP_30_ALL."
+    }
+  },
+  "labels": {
+    "dps": {
+      "source": {
+        "singleSkill": "CombinedDPS",
+        "crossSkill": "FullDPS"
+      },
+      "exclusiveUpperBounds": [
+        1000000,
+        5000000,
+        10000000,
+        25000000,
+        50000000
+      ],
+      "classRange": [
+        0,
+        5
+      ]
+    },
+    "ehp": {
+      "source": "TotalEHP",
+      "exclusiveUpperBounds": [
+        20000,
+        50000,
+        100000
+      ],
+      "classRange": [
+        0,
+        3
+      ]
+    },
+    "elemental_max_hit": {
+      "source": "minimum(FireMaximumHitTaken, ColdMaximumHitTaken, LightningMaximumHitTaken)",
+      "exclusiveUpperBounds": [
+        5000,
+        10000,
+        15000,
+        20000
+      ],
+      "classRange": [
+        0,
+        4
+      ]
+    },
+    "physical_max_hit": {
+      "source": "PhysicalMaximumHitTaken",
+      "exclusiveUpperBounds": [
+        5000,
+        10000,
+        15000,
+        20000
+      ],
+      "classRange": [
+        0,
+        4
+      ]
+    },
+    "elemental_resist": {
+      "source": "minimum(FireResist, ColdResist, LightningResist)",
+      "exclusiveUpperBounds": [
+        0,
+        75,
+        105
+      ],
+      "classRange": [
+        0,
+        3
+      ]
+    },
+    "chaos_resist": {
+      "source": "ChaosResist",
+      "exclusiveUpperBounds": [
+        -60,
+        0,
+        75
+      ],
+      "classRange": [
+        0,
+        3
+      ]
+    }
+  },
+  "derivedFields": {
+    "delta": {
+      "formula": "candidate exact metric minus baseline metric",
+      "sameContextRequired": [
+        "engine fingerprint",
+        "skill identity and aggregation",
+        "scenario",
+        "configuration",
+        "units"
+      ],
+      "modelFeatureAllowed": false
+    }
+  }
+}

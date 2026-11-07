@@ -1,0 +1,62 @@
+local BoundedInflate = require("Modules.Optimizer.BoundedInflate")
+
+describe("PoB bounded zlib inflater", function()
+	local function fromHex(hex)
+		return (hex:gsub("..", function(pair) return string.char(tonumber(pair, 16)) end))
+	end
+
+	local xml = '<PathOfBuilding><Build targetVersion="3_0"/></PathOfBuilding>'
+	local compressed = fromHex("789cb309482cc9f04f732acdcc49c9cc4bb7b301b3144a128bd2534bc2528b8a33f3f36c958ce30d94f4ed6cf4d1140300a266156d")
+
+	it("inflates a standard PoB zlib stream exactly", function()
+		local output, reason = BoundedInflate.inflate(compressed)
+		assert.is_nil(reason)
+		assert.are.equal(xml, output)
+	end)
+
+	it("rejects output above the caller limit before growing the destination", function()
+		local output, reason = BoundedInflate.inflate(compressed, 16)
+		assert.is_nil(output)
+		assert.are.equal("payload_too_large", reason)
+	end)
+
+	it("accepts output exactly at a smaller caller limit", function()
+		local output, reason = BoundedInflate.inflate(compressed, #xml)
+		assert.is_nil(reason)
+		assert.are.equal(xml, output)
+	end)
+
+	it("rejects actual zlib output one byte above the global ceiling", function()
+		local fixture = assert(io.open("../spec/System/fixtures/oversized_zlib_32m.bin", "rb"))
+		local oversizedCompressed = fixture:read("*a")
+		fixture:close()
+		assert.is_true(#oversizedCompressed < 65536)
+		local output, reason = BoundedInflate.inflate(oversizedCompressed)
+		assert.is_nil(output)
+		assert.are.equal("payload_too_large", reason)
+	end)
+
+	it("allows shipped static game data above the untrusted build-code ceiling", function()
+		local fixture = assert(io.open("../spec/System/fixtures/oversized_zlib_32m.bin", "rb"))
+		local oversizedCompressed = fixture:read("*a")
+		fixture:close()
+		local output, reason = BoundedInflate.inflateTrustedStaticData(oversizedCompressed)
+		assert.is_nil(reason)
+		assert.are.equal(BoundedInflate.MAX_OUTPUT_BYTES + 1, #output)
+	end)
+
+	it("rejects malformed and empty compressed inputs with bounded errors", function()
+		local empty, emptyReason = BoundedInflate.inflate("")
+		local malformed, malformedReason = BoundedInflate.inflate("not a zlib stream")
+		assert.is_nil(empty)
+		assert.are.equal("invalid_code", emptyReason)
+		assert.is_nil(malformed)
+		assert.are.equal("invalid_code", malformedReason)
+	end)
+
+	it("never lets a caller raise the global output ceiling", function()
+		local output, reason = BoundedInflate.inflate(compressed, BoundedInflate.MAX_OUTPUT_BYTES * 2)
+		assert.is_nil(reason)
+		assert.are.equal(xml, output)
+	end)
+end)

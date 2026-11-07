@@ -183,6 +183,11 @@ function CompareEntryClass:LoadFromXML(xmlText)
 	wipeGlobalCache()
 	self.calcsTab:BuildOutput()
 	self.buildFlag = false
+	-- The parsed sections and original XML are only needed while populating the
+	-- tabs. Comparison entries keep the resolved PoB model; retaining both large
+	-- representations wastes memory for no downstream feature.
+	self.xmlText = nil
+	self.xmlSectionList = nil
 end
 
 -- Load build section attributes

@@ -1430,7 +1430,7 @@ function calcs.offence(env, actor, activeSkill)
 				total = s_format("= %.2f ^8per second", output.TotemPlacementSpeed),
 			})
 		end
-		output.ActiveTotemLimit = skillModList:Sum("BASE", skillCfg, "ActiveTotemLimit", "ActiveBallistaLimit")
+		output.ActiveTotemLimit = calcs.getActiveTotemLimit(activeSkill)
 		output.TotemsSummoned = env.modDB:Override(nil, "TotemsSummoned") or output.ActiveTotemLimit
 		if breakdown then
 			breakdown.ActiveTotemLimit = {

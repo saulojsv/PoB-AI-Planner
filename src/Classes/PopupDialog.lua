@@ -70,17 +70,33 @@ function PopupDialogClass:Draw(viewPort)
 end
 
 function PopupDialogClass:ProcessInput(inputEvents, viewPort)
+	-- A focused edit/dropdown can consume KeyDown before the popup handles it.
+	-- Give Escape modal priority so every popup can always be dismissed, and
+	-- route a click on its designated dismiss control before focused inputs can
+	-- consume the first click merely to release focus.
+	for _, event in ipairs(inputEvents) do
+		if event.type == "KeyDown" and event.key == "ESCAPE" then
+			local escapeControl = self.escapeControl and self.controls[self.escapeControl]
+			if escapeControl then
+				escapeControl:Click()
+			else
+				main:ClosePopup(self)
+			end
+			return
+		end
+		if event.type == "KeyUp" and event.key == "LEFTBUTTON" then
+			local escapeControl = self.escapeControl and self.controls[self.escapeControl]
+			if escapeControl and type(escapeControl.Click) == "function"
+				and escapeControl.IsMouseOver and escapeControl:IsMouseOver() then
+				escapeControl:Click()
+				return
+			end
+		end
+	end
 	self:ProcessControlsInput(inputEvents, viewPort)
 	for id, event in ipairs(inputEvents) do
 		if event.type == "KeyDown" then
-			if event.key == "ESCAPE" then
-				if self.escapeControl then
-					self.controls[self.escapeControl]:Click()
-				else
-					main:ClosePopup()
-				end
-				return
-			elseif event.key == "RETURN" then
+			if event.key == "RETURN" then
 				if self.enterControl then
 					self.controls[self.enterControl]:Click()
 					return

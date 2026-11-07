@@ -1,0 +1,1735 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pob-ai.local/schemas/ipc_protocol.v1.json",
+  "title": "PoB AI Planner JSON-RPC 2.0 protocol",
+  "$defs": {
+    "engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pobVersion",
+        "pobBranch",
+        "dataVersion",
+        "treeVersion",
+        "manifestFingerprint"
+      ],
+      "properties": {
+        "pobVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "pobBranch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "dataVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "treeVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "manifestFingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$"
+        }
+      }
+    },
+    "skill": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "groupIndex",
+        "skillIndex",
+        "effectId",
+        "gemId",
+        "slot"
+      ],
+      "properties": {
+        "groupIndex": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 48
+        },
+        "skillIndex": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 12
+        },
+        "effectId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "gemId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "slot": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      }
+    },
+    "runSpec": {
+      "$defs": {
+        "skill": {
+          "$ref": "#/$defs/skill"
+        }
+      },
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "modelMode",
+        "searchMode",
+        "skill",
+        "scenario",
+        "targets",
+        "resistances",
+        "crossSkillMode",
+        "mutationAggressiveness",
+        "graph",
+        "budget"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "modelMode": {
+          "enum": [
+            "approved_or_fallback",
+            "deterministic_fallback",
+            "approved_gnn"
+          ]
+        },
+        "modelPackageId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        },
+        "searchMode": {
+          "enum": [
+            "SINGLE_SKILL_ONLY",
+            "CROSS_SKILL_COMBINATION"
+          ]
+        },
+        "skill": {
+          "$ref": "#/$defs/skill"
+        },
+        "scenario": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "profile",
+            "enemyPreset"
+          ],
+          "properties": {
+            "profile": {
+              "enum": [
+                "Current",
+                "PinnacleUnbuffed",
+                "PinnacleChassis"
+              ]
+            },
+            "enemyPreset": {
+              "enum": [
+                "Active",
+                "None",
+                "Boss",
+                "Pinnacle",
+                "Uber"
+              ]
+            }
+          }
+        },
+        "targets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "dps",
+            "ehp",
+            "elementalMaxHit",
+            "physicalMaxHit"
+          ],
+          "properties": {
+            "dps": {
+              "enum": [
+                "TIER_1M_TO_5M",
+                "TIER_5M_TO_10M",
+                "TIER_10M_TO_25M",
+                "TIER_25M_TO_50M",
+                "TIER_50M_PLUS"
+              ]
+            },
+            "ehp": {
+              "enum": [
+                "TIER_20K_TO_50K",
+                "TIER_50K_TO_100K",
+                "TIER_100K_PLUS"
+              ]
+            },
+            "elementalMaxHit": {
+              "enum": [
+                "TIER_5K_TO_10K",
+                "TIER_10K_TO_20K",
+                "TIER_15K_TO_25K",
+                "TIER_20K_PLUS"
+              ]
+            },
+            "physicalMaxHit": {
+              "enum": [
+                "TIER_5K_TO_10K",
+                "TIER_10K_TO_20K",
+                "TIER_15K_TO_25K",
+                "TIER_20K_PLUS"
+              ]
+            }
+          }
+        },
+        "resistances": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "elemental",
+            "chaos"
+          ],
+          "properties": {
+            "elemental": {
+              "enum": [
+                "CAP_EFFECTIVE",
+                "OVERCAP_30_ALL"
+              ]
+            },
+            "chaos": {
+              "enum": [
+                "POSITIVE_OR_CAP",
+                "CAP_EFFECTIVE"
+              ]
+            }
+          }
+        },
+        "crossSkillMode": {
+          "enum": [
+            "SINGLE_SKILL_ONLY",
+            "ALLOW_COC_AND_CWC",
+            "ALLOW_SPELLSLINGER_AND_TRIGGERS",
+            "ALLOW_DEBUFF_PRIMERS"
+          ]
+        },
+        "mutationAggressiveness": {
+          "enum": [
+            "CONSERVATIVE_FINE_TUNE",
+            "BALANCED_LOCAL_SEARCH",
+            "AGGRESSIVE_CLUSTER_EXPANSION"
+          ]
+        },
+        "graph": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "radius"
+          ],
+          "properties": {
+            "radius": {
+              "enum": [
+                2,
+                4,
+                6
+              ]
+            }
+          }
+        },
+        "budget": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "minProposals",
+            "maxExactEvaluations",
+            "timeoutSeconds"
+          ],
+          "properties": {
+            "minProposals": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000,
+              "default": 1000
+            },
+            "maxExactEvaluations": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000,
+              "default": 5000
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600,
+              "default": 1800
+            }
+          }
+        }
+      }
+    },
+    "buildSnapshot": {
+      "$defs": {
+        "engine": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "pobVersion",
+            "pobBranch",
+            "dataVersion",
+            "treeVersion",
+            "manifestFingerprint"
+          ],
+          "properties": {
+            "pobVersion": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "pobBranch": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "dataVersion": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "treeVersion": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "manifestFingerprint": {
+              "type": "string",
+              "pattern": "^[0-9a-fA-F]{64}$"
+            }
+          }
+        },
+        "skill": {
+          "$ref": "#/$defs/skill"
+        }
+      },
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "engine",
+        "skill",
+        "scenario",
+        "passiveNodes",
+        "passiveEdges",
+        "items",
+        "skillGroups",
+        "baselineMetrics"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "engine": {
+          "$ref": "#/$defs/engine"
+        },
+        "skill": {
+          "$ref": "#/$defs/skill"
+        },
+        "scenario": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "profile",
+            "enemyPreset"
+          ],
+          "properties": {
+            "profile": {
+              "enum": [
+                "Current",
+                "PinnacleUnbuffed",
+                "PinnacleChassis"
+              ]
+            },
+            "enemyPreset": {
+              "enum": [
+                "Active",
+                "None",
+                "Boss",
+                "Pinnacle",
+                "Uber"
+              ]
+            }
+          }
+        },
+        "passiveNodes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "allocated",
+              "category"
+            ],
+            "properties": {
+              "id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "allocated": {
+                "type": "boolean"
+              },
+              "category": {
+                "type": "string",
+                "maxLength": 64
+              }
+            }
+          }
+        },
+        "passiveEdges": {
+          "type": "array",
+          "maxItems": 80000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "source",
+              "target"
+            ],
+            "properties": {
+              "source": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "target": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        },
+        "items": {
+          "type": "array",
+          "maxItems": 80,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "slot",
+              "base",
+              "fingerprint"
+            ],
+            "properties": {
+              "slot": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "base": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "rarity": {
+                "type": "string",
+                "maxLength": 40
+              },
+              "fingerprint": {
+                "type": "string",
+                "pattern": "^[0-9a-fA-F]{64}$"
+              }
+            }
+          }
+        },
+        "skillGroups": {
+          "type": "array",
+          "maxItems": 48,
+          "items": {
+            "type": "object",
+            "required": [
+              "index",
+              "slot",
+              "gems"
+            ],
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 48
+              },
+              "slot": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "includedInFullDPS": {
+                "type": "boolean"
+              },
+              "gems": {
+                "type": "array",
+                "maxItems": 32,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "gemId",
+                    "effectId",
+                    "level",
+                    "quality",
+                    "origin"
+                  ],
+                  "properties": {
+                    "gemId": {
+                      "type": "string",
+                      "maxLength": 160
+                    },
+                    "effectId": {
+                      "type": "string",
+                      "maxLength": 180
+                    },
+                    "level": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 100
+                    },
+                    "quality": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 100
+                    },
+                    "origin": {
+                      "enum": [
+                        "socketed_gem",
+                        "item_granted",
+                        "imbued",
+                        "unknown"
+                      ]
+                    },
+                    "support": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "baselineMetrics": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "datasetShard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "recordId",
+        "lineageId",
+        "sourceReview",
+        "nativeValidation",
+        "engine",
+        "skill",
+        "scenario",
+        "runSpec",
+        "buildSnapshot",
+        "proposal",
+        "proposalIndex",
+        "setId",
+        "exactMetrics"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "recordId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "lineageId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "setId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "proposalIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sourceReview": {
+          "type": "object",
+          "required": [
+            "rights",
+            "rightsBasis",
+            "consent",
+            "reviewed",
+            "reviewer",
+            "evidence"
+          ],
+          "properties": {
+            "rights": {
+              "const": "authorized"
+            },
+            "rightsBasis": {
+              "enum": [
+                "user_authored",
+                "creator_permission",
+                "open_license"
+              ]
+            },
+            "consent": {
+              "const": true
+            },
+            "reviewed": {
+              "const": true
+            },
+            "reviewer": {
+              "type": "string",
+              "minLength": 1
+            },
+            "evidence": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "nativeValidation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "exactRecalculated",
+            "skillCompatible",
+            "resourcesValid",
+            "scenarioCertified",
+            "metricsContextValid",
+            "triggerCertified",
+            "unsupportedModesAbsent"
+          ],
+          "properties": {
+            "exactRecalculated": {
+              "const": true
+            },
+            "skillCompatible": {
+              "const": true
+            },
+            "resourcesValid": {
+              "const": true
+            },
+            "scenarioCertified": {
+              "const": true
+            },
+            "metricsContextValid": {
+              "const": true
+            },
+            "triggerCertified": {
+              "const": true
+            },
+            "unsupportedModesAbsent": {
+              "const": true
+            }
+          }
+        },
+        "engine": {
+          "$ref": "#/$defs/engine"
+        },
+        "skill": {
+          "$ref": "#/$defs/skill"
+        },
+        "scenario": {
+          "type": "object"
+        },
+        "runSpec": {
+          "$ref": "#/$defs/runSpec"
+        },
+        "buildSnapshot": {
+          "$ref": "#/$defs/buildSnapshot"
+        },
+        "proposal": {
+          "type": "object"
+        },
+        "exactMetrics": {
+          "type": "object",
+          "required": [
+            "exactCalculated",
+            "feasible",
+            "CombinedDPS",
+            "FullDPS",
+            "TotalEHP",
+            "PhysicalMaximumHitTaken",
+            "FireMaximumHitTaken",
+            "ColdMaximumHitTaken",
+            "LightningMaximumHitTaken",
+            "FireResist",
+            "ColdResist",
+            "LightningResist",
+            "ChaosResist"
+          ],
+          "properties": {
+            "exactCalculated": {
+              "const": true
+            },
+            "feasible": {
+              "type": "boolean"
+            },
+            "CombinedDPS": {
+              "type": "number",
+              "minimum": 0
+            },
+            "FullDPS": {
+              "type": "number",
+              "minimum": 0
+            },
+            "TotalEHP": {
+              "type": "number",
+              "minimum": 0
+            },
+            "PhysicalMaximumHitTaken": {
+              "type": "number",
+              "minimum": 0
+            },
+            "FireMaximumHitTaken": {
+              "type": "number",
+              "minimum": 0
+            },
+            "ColdMaximumHitTaken": {
+              "type": "number",
+              "minimum": 0
+            },
+            "LightningMaximumHitTaken": {
+              "type": "number",
+              "minimum": 0
+            },
+            "FireResist": {
+              "type": "number"
+            },
+            "ColdResist": {
+              "type": "number"
+            },
+            "LightningResist": {
+              "type": "number"
+            },
+            "FireResistOverCap": {
+              "type": "number"
+            },
+            "ColdResistOverCap": {
+              "type": "number"
+            },
+            "LightningResistOverCap": {
+              "type": "number"
+            },
+            "ChaosResist": {
+              "type": "number"
+            },
+            "infeasibleReason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": {
+            "type": [
+              "number",
+              "boolean",
+              "string",
+              "null"
+            ]
+          }
+        },
+        "labels": {
+          "type": "object",
+          "required": [
+            "dps",
+            "ehp",
+            "elemental_max_hit",
+            "physical_max_hit",
+            "elemental_resist",
+            "chaos_resist"
+          ],
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "$defs": {
+        "engine": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "pobVersion",
+            "pobBranch",
+            "dataVersion",
+            "treeVersion",
+            "manifestFingerprint"
+          ],
+          "properties": {
+            "pobVersion": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "pobBranch": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "dataVersion": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "treeVersion": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "manifestFingerprint": {
+              "type": "string",
+              "pattern": "^[0-9a-fA-F]{64}$"
+            }
+          }
+        },
+        "skill": {
+          "$ref": "#/$defs/skill"
+        },
+        "runSpec": {
+          "$defs": {
+            "skill": {
+              "$ref": "#/$defs/skill"
+            }
+          },
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "modelMode",
+            "searchMode",
+            "skill",
+            "scenario",
+            "targets",
+            "resistances",
+            "crossSkillMode",
+            "mutationAggressiveness",
+            "graph",
+            "budget"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 1
+            },
+            "modelMode": {
+              "enum": [
+                "approved_or_fallback",
+                "deterministic_fallback",
+                "approved_gnn"
+              ]
+            },
+            "modelPackageId": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 128
+            },
+            "searchMode": {
+              "enum": [
+                "SINGLE_SKILL_ONLY",
+                "CROSS_SKILL_COMBINATION"
+              ]
+            },
+            "skill": {
+              "$ref": "#/$defs/skill"
+            },
+            "scenario": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "profile",
+                "enemyPreset"
+              ],
+              "properties": {
+                "profile": {
+                  "enum": [
+                    "Current",
+                    "PinnacleUnbuffed",
+                    "PinnacleChassis"
+                  ]
+                },
+                "enemyPreset": {
+                  "enum": [
+                    "Active",
+                    "None",
+                    "Boss",
+                    "Pinnacle",
+                    "Uber"
+                  ]
+                }
+              }
+            },
+            "targets": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "dps",
+                "ehp",
+                "elementalMaxHit",
+                "physicalMaxHit"
+              ],
+              "properties": {
+                "dps": {
+                  "enum": [
+                    "TIER_1M_TO_5M",
+                    "TIER_5M_TO_10M",
+                    "TIER_10M_TO_25M",
+                    "TIER_25M_TO_50M",
+                    "TIER_50M_PLUS"
+                  ]
+                },
+                "ehp": {
+                  "enum": [
+                    "TIER_20K_TO_50K",
+                    "TIER_50K_TO_100K",
+                    "TIER_100K_PLUS"
+                  ]
+                },
+                "elementalMaxHit": {
+                  "enum": [
+                    "TIER_5K_TO_10K",
+                    "TIER_10K_TO_20K",
+                    "TIER_15K_TO_25K",
+                    "TIER_20K_PLUS"
+                  ]
+                },
+                "physicalMaxHit": {
+                  "enum": [
+                    "TIER_5K_TO_10K",
+                    "TIER_10K_TO_20K",
+                    "TIER_15K_TO_25K",
+                    "TIER_20K_PLUS"
+                  ]
+                }
+              }
+            },
+            "resistances": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "elemental",
+                "chaos"
+              ],
+              "properties": {
+                "elemental": {
+                  "enum": [
+                    "CAP_EFFECTIVE",
+                    "OVERCAP_30_ALL"
+                  ]
+                },
+                "chaos": {
+                  "enum": [
+                    "POSITIVE_OR_CAP",
+                    "CAP_EFFECTIVE"
+                  ]
+                }
+              }
+            },
+            "crossSkillMode": {
+              "enum": [
+                "SINGLE_SKILL_ONLY",
+                "ALLOW_COC_AND_CWC",
+                "ALLOW_SPELLSLINGER_AND_TRIGGERS",
+                "ALLOW_DEBUFF_PRIMERS"
+              ]
+            },
+            "mutationAggressiveness": {
+              "enum": [
+                "CONSERVATIVE_FINE_TUNE",
+                "BALANCED_LOCAL_SEARCH",
+                "AGGRESSIVE_CLUSTER_EXPANSION"
+              ]
+            },
+            "graph": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "radius"
+              ],
+              "properties": {
+                "radius": {
+                  "enum": [
+                    2,
+                    4,
+                    6
+                  ]
+                }
+              }
+            },
+            "budget": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "minProposals",
+                "maxExactEvaluations",
+                "timeoutSeconds"
+              ],
+              "properties": {
+                "minProposals": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10000,
+                  "default": 1000
+                },
+                "maxExactEvaluations": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10000,
+                  "default": 5000
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600,
+                  "default": 1800
+                }
+              }
+            }
+          }
+        },
+        "buildSnapshot": {
+          "$defs": {
+            "engine": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "pobVersion",
+                "pobBranch",
+                "dataVersion",
+                "treeVersion",
+                "manifestFingerprint"
+              ],
+              "properties": {
+                "pobVersion": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "pobBranch": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "dataVersion": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "treeVersion": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "manifestFingerprint": {
+                  "type": "string",
+                  "pattern": "^[0-9a-fA-F]{64}$"
+                }
+              }
+            },
+            "skill": {
+              "$ref": "#/$defs/skill"
+            }
+          },
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "engine",
+            "skill",
+            "scenario",
+            "passiveNodes",
+            "passiveEdges",
+            "items",
+            "skillGroups",
+            "baselineMetrics"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 1
+            },
+            "engine": {
+              "$ref": "#/$defs/engine"
+            },
+            "skill": {
+              "$ref": "#/$defs/skill"
+            },
+            "scenario": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "profile",
+                "enemyPreset"
+              ],
+              "properties": {
+                "profile": {
+                  "enum": [
+                    "Current",
+                    "PinnacleUnbuffed",
+                    "PinnacleChassis"
+                  ]
+                },
+                "enemyPreset": {
+                  "enum": [
+                    "Active",
+                    "None",
+                    "Boss",
+                    "Pinnacle",
+                    "Uber"
+                  ]
+                }
+              }
+            },
+            "passiveNodes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 20000,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "allocated",
+                  "category"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "allocated": {
+                    "type": "boolean"
+                  },
+                  "category": {
+                    "type": "string",
+                    "maxLength": 64
+                  }
+                }
+              }
+            },
+            "passiveEdges": {
+              "type": "array",
+              "maxItems": 80000,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "source",
+                  "target"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "target": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              }
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 80,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "slot",
+                  "base",
+                  "fingerprint"
+                ],
+                "properties": {
+                  "slot": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "base": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "rarity": {
+                    "type": "string",
+                    "maxLength": 40
+                  },
+                  "fingerprint": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{64}$"
+                  }
+                }
+              }
+            },
+            "skillGroups": {
+              "type": "array",
+              "maxItems": 48,
+              "items": {
+                "type": "object",
+                "required": [
+                  "index",
+                  "slot",
+                  "gems"
+                ],
+                "properties": {
+                  "index": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 48
+                  },
+                  "slot": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "includedInFullDPS": {
+                    "type": "boolean"
+                  },
+                  "gems": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "gemId",
+                        "effectId",
+                        "level",
+                        "quality",
+                        "origin"
+                      ],
+                      "properties": {
+                        "gemId": {
+                          "type": "string",
+                          "maxLength": 160
+                        },
+                        "effectId": {
+                          "type": "string",
+                          "maxLength": 180
+                        },
+                        "level": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 100
+                        },
+                        "quality": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 100
+                        },
+                        "origin": {
+                          "enum": [
+                            "socketed_gem",
+                            "item_granted",
+                            "imbued",
+                            "unknown"
+                          ]
+                        },
+                        "support": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "baselineMetrics": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      }
+    },
+    "proposal": {
+      "type": "object",
+      "required": [
+        "proposalId",
+        "family"
+      ],
+      "properties": {
+        "proposalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "family": {
+          "enum": [
+            "tree",
+            "skill",
+            "equipment",
+            "jewel",
+            "configuration",
+            "cross_skill",
+            "hybrid",
+            "baseline",
+            "other"
+          ]
+        },
+        "addedNodeIds": {
+          "type": "array",
+          "maxItems": 120,
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "removedNodeIds": {
+          "type": "array",
+          "maxItems": 120,
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "changedItemSlots": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "maxLength": 64
+          }
+        },
+        "featureTokens": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "string",
+            "maxLength": 256
+          }
+        },
+        "numericFeatures": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "number"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "method": {
+          "const": "build_planner/status"
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "authToken"
+          ],
+          "properties": {
+            "authToken": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 256
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "method": {
+          "const": "build_planner/list_models"
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "authToken"
+          ],
+          "properties": {
+            "authToken": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 256
+            },
+            "engine": {
+              "$ref": "#/$defs/engine"
+            },
+            "skill": {
+              "$ref": "#/$defs/skill"
+            },
+            "scenario": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "method": {
+          "const": "build_planner/optimize"
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "authToken",
+            "runSpec",
+            "buildSnapshot",
+            "proposals"
+          ],
+          "properties": {
+            "authToken": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 256
+            },
+            "runSpec": {
+              "$ref": "#/$defs/runSpec"
+            },
+            "buildSnapshot": {
+              "$ref": "#/$defs/buildSnapshot"
+            },
+            "proposals": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 10000,
+              "items": {
+                "$ref": "#/$defs/proposal"
+              }
+            },
+            "modelPackageId": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 128
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "method": {
+          "const": "build_planner/poll"
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "authToken",
+            "job_id"
+          ],
+          "properties": {
+            "authToken": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 256
+            },
+            "job_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "method": {
+          "const": "build_planner/cancel"
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "authToken",
+            "job_id"
+          ],
+          "properties": {
+            "authToken": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 256
+            },
+            "job_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "method": {
+          "const": "build_planner/export_dataset"
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "authToken",
+            "consent",
+            "rightsBasis",
+            "records"
+          ],
+          "properties": {
+            "authToken": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 256
+            },
+            "consent": {
+              "const": true
+            },
+            "rightsBasis": {
+              "const": "user_authored"
+            },
+            "records": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 250,
+              "items": {
+                "$ref": "#/$defs/datasetShard"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "build_planner/progress"
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "job_id",
+            "phase",
+            "processed",
+            "total"
+          ],
+          "properties": {
+            "job_id": {
+              "type": "string"
+            },
+            "phase": {
+              "type": "string"
+            },
+            "processed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "total": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "error"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "type": [
+            "string",
+            "integer",
+            "null"
+          ]
+        },
+        "error": {
+          "type": "object",
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "type": "integer"
+            },
+            "message": {
+              "type": "string"
+            },
+            "data": {}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "result": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    }
+  ]
+}

@@ -1078,7 +1078,27 @@ function string:matchOrPattern(pattern)
 	return false
 end
 
-function ImportBuild(importLink, callback)
+function ImportBuild(importLink, callback, options)
+	if type(callback) ~= "function" then
+		return false, "Import callback is required"
+	end
+	if type(importLink) ~= "string" or importLink == "" then
+		callback(nil, nil, "Build import input is empty")
+		return false, "Build import input is empty"
+	end
+	local function decodeBuild(data, source)
+		local lifecycle = require("Modules.Optimizer.ImportLifecycle")
+		if type(data) ~= "string" or data == "" then
+			callback(nil, source, lifecycle.FailureMessage("invalid_code"))
+			return
+		end
+		local xmlText, coverageOrReason = lifecycle.DecodeBuildCode(data)
+		if not xmlText then
+			callback(nil, source, lifecycle.FailureMessage(coverageOrReason))
+			return
+		end
+		callback(xmlText, source)
+	end
 	local urlText = importLink:gsub("^[%s?]+", ""):gsub("[%s?]+$", "") -- Quick Trim
 	if urlText:match("youtube%.com/redirect%?") or urlText:match("google%.com/url%?") then
 		local nested_url = urlText:gsub(".*[?&]q=([^&]+).*", "%1")
@@ -1095,13 +1115,16 @@ function ImportBuild(importLink, callback)
 	if websiteInfo then
 		buildSites.DownloadBuild(urlText, websiteInfo, function(isSuccess, data)
 			if isSuccess then
-				callback(Inflate(common.base64.decode(data:gsub("-", "+"):gsub("_", "/"))), urlText)
+				decodeBuild(data, urlText)
+			else
+				callback(nil, urlText, tostring(data or "Build download failed"))
 			end
-		end)
+		end, options)
 	else
 		-- try to decode input buffer
-		callback(Inflate(common.base64.decode(importLink:gsub("-", "+"):gsub("_", "/"))), nil)
+		decodeBuild(importLink, nil)
 	end
+	return true
 end
 
 ---@param text string

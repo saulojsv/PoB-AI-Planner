@@ -6,6 +6,19 @@
 --
 local connectionProtocol, proxyURL, noSSL = ...
 
+-- A locally managed AI Planner release intentionally overlays official PoB
+-- program files. Never let the upstream updater replace or delete that set.
+local scriptPath, scriptFallback = GetScriptPath()
+local managedRoot = type(scriptPath) == "string" and scriptPath ~= "" and scriptPath or nil
+if not managedRoot and type(scriptFallback) == "string" and scriptFallback ~= "" then managedRoot = scriptFallback end
+managedRoot = managedRoot or "."
+local managedMarker = io.open(managedRoot .. "/AIPlannerManaged.release", "rb")
+if managedMarker then
+	managedMarker:close()
+	ConPrintf("Updates are disabled for this locally managed PoB AI Planner release.")
+	return "none"
+end
+
 local xml = require("xml")
 local sha1 = require("sha1")
 local curl = require("lcurl.safe")

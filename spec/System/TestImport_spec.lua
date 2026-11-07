@@ -12,6 +12,18 @@ describe("TestImport", function()
 		newBuild()
 	end)
 
+	it("reports malformed build codes through the import callback without throwing", function()
+		local callbackResult
+		local returned, err = ImportBuild("not-a-valid-build-code", function(xmlText, source, importError)
+			callbackResult = { xmlText = xmlText, source = source, error = importError }
+		end)
+
+		assert.is_true(returned)
+		assert.is_nil(err)
+		assert.is_nil(callbackResult.xmlText)
+		assert.is_truthy(callbackResult.error)
+	end)
+
 	it("imports with correct tree", function()
 		build.importTab:ImportPassiveTreeAndJewels(sampleData, true)
 		runCallback("OnFrame")

@@ -1,0 +1,224 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pob-ai.local/schemas/model_manifest.v1.json",
+  "title": "PoB AI Planner approved model manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "packageId",
+    "status",
+    "modelType",
+    "featureSchema",
+    "skill",
+    "scenario",
+    "engine",
+    "files",
+    "provenance",
+    "training",
+    "gates"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "packageId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "status": {
+      "enum": [
+        "staging",
+        "approved"
+      ]
+    },
+    "modelType": {
+      "const": "hetero-gatv2-ensemble-v1"
+    },
+    "featureSchema": {
+      "const": "pob-heterograph-v1"
+    },
+    "skill": {
+      "$ref": "#/$defs/skill"
+    },
+    "scenario": {
+      "type": "object",
+      "required": [
+        "profile",
+        "enemyPreset"
+      ],
+      "properties": {
+        "profile": {
+          "type": "string"
+        },
+        "enemyPreset": {
+          "type": "string"
+        }
+      }
+    },
+    "engine": {
+      "$ref": "#/$defs/engine"
+    },
+    "files": {
+      "type": "object",
+      "required": [
+        "model_weights.pt",
+        "hyperparameters.json"
+      ],
+      "properties": {
+        "model_weights.pt": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$"
+        },
+        "hyperparameters.json": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$"
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "required": [
+        "consent",
+        "sourceReview",
+        "authorizedLineageIds"
+      ],
+      "properties": {
+        "consent": {
+          "const": true
+        },
+        "sourceReview": {
+          "const": "passed"
+        },
+        "authorizedLineageIds": {
+          "type": "array",
+          "minItems": 13,
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "training": {
+      "type": "object",
+      "required": [
+        "trainingLineages",
+        "holdoutLineages",
+        "trainingLabels",
+        "holdoutLabels"
+      ],
+      "properties": {
+        "trainingLineages": {
+          "type": "integer",
+          "minimum": 8
+        },
+        "holdoutLineages": {
+          "type": "integer",
+          "minimum": 5
+        },
+        "trainingLabels": {
+          "type": "integer",
+          "minimum": 128
+        },
+        "holdoutLabels": {
+          "type": "integer",
+          "minimum": 50
+        }
+      }
+    },
+    "gates": {
+      "type": "object",
+      "required": [
+        "spearmanMacro",
+        "paretoRecall",
+        "exactEvaluationReduction",
+        "ipcLatencyRatio",
+        "status"
+      ],
+      "properties": {
+        "spearmanMacro": {
+          "type": "number",
+          "minimum": 0.8,
+          "maximum": 1
+        },
+        "paretoRecall": {
+          "type": "number",
+          "minimum": 0.9,
+          "maximum": 1
+        },
+        "exactEvaluationReduction": {
+          "type": "number",
+          "minimum": 0.2,
+          "maximum": 1
+        },
+        "ipcLatencyRatio": {
+          "type": "number",
+          "exclusiveMaximum": 0.2
+        },
+        "status": {
+          "const": "passed"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pobVersion",
+        "pobBranch",
+        "dataVersion",
+        "treeVersion",
+        "manifestFingerprint"
+      ],
+      "properties": {
+        "pobVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "pobBranch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "dataVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "treeVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "manifestFingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$"
+        }
+      }
+    },
+    "skill": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "effectId",
+        "gemId"
+      ],
+      "properties": {
+        "effectId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "gemId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        }
+      }
+    }
+  }
+}

@@ -3,6 +3,8 @@ local function uint16(value)
 end
 
 local parseAbyssJewel = select(4, LoadModule("Modules/DataAbyssJewelLookUpTableHelper"))
+local loadJewelFile = require("Modules.DataJewelFileLoader")
+local BoundedInflate = require("Modules.Optimizer.BoundedInflate")
 
 local function abyssModification(components)
 	local encoded = { string.char(#components) }
@@ -114,6 +116,7 @@ describe("Abyss timeless jewels", function()
 	end)
 
 	after_each(function()
+		data.timelessJewelLUTs[2] = nil
 		data.timelessJewelLUTs[9] = nil
 		data.timelessJewelLUTs[11] = nil
 		if main.popups[1] and main.popups[1].title == "Find a Timeless Jewel" then
@@ -131,6 +134,15 @@ describe("Abyss timeless jewels", function()
 		assert.are.equal("abyss_hypnotic", kurgal.jewelData.conqueredBy.conqueror.type)
 		assert.are.equal(6564, zorath.jewelData.conqueredBy.id)
 		assert.are.equal("abyss_special", zorath.jewelData.conqueredBy.conqueror.type)
+	end)
+
+	it("loads the full shipped Zorath table above the build-code inflate limit", function()
+		local jewelData = loadJewelFile("AbyssZorath", false)
+		assert.is_truthy(type(jewelData) == "string" and #jewelData > BoundedInflate.MAX_OUTPUT_BYTES,
+			"the shipped Abyss Zorath table must load through the trusted static-data inflater")
+		local jewelLUT = parseAbyssJewel(11, jewelData)
+		assert.is_truthy(jewelLUT.seedCount > 0)
+		assert.is_truthy(jewelLUT.seedMaximum > jewelLUT.seedMinimum)
 	end)
 
 	it("reads Kurgal seed 533 at socket 61419", function()
@@ -162,6 +174,31 @@ describe("Abyss timeless jewels", function()
 		assert.is_true(ok)
 		assert.are.equal(29419012, compressedSize)
 		assert.are.equal(string.char(0x78, 0xDA, 0x51, 0x9B, 0xED, 0x9E), signature)
+	end)
+
+	it("falls back to bounded zlib inflation and reads a timeless LUT when the host inflater is an empty stub", function()
+		local loadJewelFile = LoadModule("Modules/DataJewelFileLoader")
+		local originalInflate = _G.Inflate
+		_G.Inflate = function() return "" end
+		local ok, jewelData = pcall(loadJewelFile, "LethalPride", false)
+		_G.Inflate = originalInflate
+
+		assert.is_true(ok)
+		assert.is_true(type(jewelData) == "string" and #jewelData > 0)
+		data.timelessJewelLUTs[2] = { data = jewelData }
+		local nodeId
+		local seedSize = data.timelessJewelSeedMax[2] - data.timelessJewelSeedMin[2] + 1
+		for id, entry in pairs(data.nodeIDList) do
+			if type(id) == "number" and type(entry) == "table" and entry.index ~= nil
+				and jewelData:byte(entry.index * seedSize + 1) ~= nil then
+				nodeId = id
+				break
+			end
+		end
+		assert.is_truthy(nodeId)
+		local affectedNodes = data.readLUT(data.timelessJewelSeedMin[2], nodeId, 2)
+		assert.is_table(affectedNodes)
+		assert.is_true(#affectedNodes > 0)
 	end)
 
 	it("applies the Kurgal example to the passive tree", function()

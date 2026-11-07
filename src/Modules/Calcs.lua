@@ -8,10 +8,17 @@ local ipairs = ipairs
 local t_insert = table.insert
 local s_format = string.format
 local m_min = math.min
-local m_ceil = math.ceil
+local getActiveSkillCount
+local buildOptimizerSkillCostAudit
+
+local function isFinite(value)
+	return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge
+end
 
 ---@class Calcs
 local calcs = require("Modules.CalcBase")
+local SkillCostAudit = require("Modules.Optimizer.SkillCostAudit")
+local EventTriggerModel = require("Modules.Optimizer.EventTriggerModel")
 calcs.breakdownModule = "Modules.CalcBreakdown"
 require("Modules.CalcSetup")
 require("Modules.CalcPerform")
@@ -81,25 +88,44 @@ end
 ---@field toggleTincture Item? Item object used as a table key.
 ---@field conditions string[]?
 ---@field extraJewelFuncs ModList?
+---@field returnEnv boolean? Internal opt-in for consumers that need read-only exact calc context
+---@field disableGuardBuffs boolean? Suppress native Guard global effects for isolated chassis evaluation
 
 -- Get calculator for other changes (adding/removing nodes, items, gems, etc)
 ---@param build Build
+---@param baseOverride CalcOverride? Optional isolated scenario override for the baseline pass
 ---@return fun(override?: CalcOverride, useFullDPS?: boolean): Output calcFunc
 ---@return Output output
-function calcs.getMiscCalculator(build)
+---@return CalcEnv env Exact environment for isolated read-only consumers; do not cache or reuse it across candidates
+function calcs.getMiscCalculator(build, baseOverride)
 	-- Run base calculation pass
-	local env, cachedPlayerDB, cachedEnemyDB, cachedMinionDB = calcs.initEnv(build, "CALCULATOR")
+	local env, cachedPlayerDB, cachedEnemyDB, cachedMinionDB = calcs.initEnv(build, "CALCULATOR", baseOverride)
 	calcs.perform(env)
-	local fullDPS = calcs.calcFullDPS(build, "CALCULATOR", {}, { cachedPlayerDB = cachedPlayerDB, cachedEnemyDB = cachedEnemyDB, cachedMinionDB = cachedMinionDB, env = nil})
+	env.player.output.SkillEntityLimits = calcs.getActiveSkillEntityLimits(env.player.activeSkillList, env.player.output, env.data)
+	local fullDPS = calcs.calcFullDPS(build, "CALCULATOR", baseOverride or {}, { cachedPlayerDB = cachedPlayerDB, cachedEnemyDB = cachedEnemyDB, cachedMinionDB = cachedMinionDB, env = nil})
+	env.player.output.EnergyShieldProtectsMana = env.modDB:Flag(nil, "EnergyShieldProtectsMana")
+	local mainSkillCount, mainSkillEnabled = getActiveSkillCount(env.player.mainSkill)
+	env.player.output.OptimizerMainSkillActivity = mainSkillEnabled and calcs.getOptimizerActivityRecord(env.player.mainSkill, env.player.output, mainSkillCount, env.minion and env.minion.output) or nil
+	env.player.output.FullDPSActivity = fullDPS.activity
+	env.player.output.FullDPSActivityTruncated = fullDPS.activityTruncated
 	local usedFullDPS = #fullDPS.skills > 0
 	if usedFullDPS then
 		env.player.output.SkillDPS = fullDPS.skills
 		env.player.output.FullDPS = fullDPS.combinedDPS
 		env.player.output.FullDotDPS = fullDPS.TotalDotDPS
+			env.player.output.FullDPSPayabilityWarnings = fullDPS.payabilityWarnings
 	end
+	env.player.output.FullDPSPayabilityWarnings = fullDPS.payabilityWarnings
+	env.player.output.FullDPSSkillAvailability = fullDPS.skillAvailability
+	env.player.output.OptimizerSkillCostAudit = buildOptimizerSkillCostAudit(build, env, env.player.output, fullDPS.skillCostAuditEntries)
 	return function(override, useFullDPS)
 		local env, cachedPlayerDB, cachedEnemyDB, cachedMinionDB = calcs.initEnv(build, "CALCULATOR", override)
 		calcs.perform(env)
+		env.player.output.SkillEntityLimits = calcs.getActiveSkillEntityLimits(env.player.activeSkillList, env.player.output, env.data)
+		local mainSkillCount, mainSkillEnabled = getActiveSkillCount(env.player.mainSkill)
+		env.player.output.OptimizerMainSkillActivity = mainSkillEnabled and calcs.getOptimizerActivityRecord(env.player.mainSkill, env.player.output, mainSkillCount, env.minion and env.minion.output) or nil
+		local fullDPSWarnings = { }
+		local fullDPSSkillCostEntries = { }
 		if (useFullDPS ~= false or build.viewMode == "TREE") and usedFullDPS then
 			-- prevent upcoming calculation from using Cached Data and thus forcing it to re-calculate new FullDPS roll-up 
 			-- without this, FullDPS increase/decrease when for node/item/gem comparison would be all 0 as it would be comparing
@@ -108,12 +134,24 @@ function calcs.getMiscCalculator(build)
 			env.player.output.SkillDPS = fullDPS.skills
 			env.player.output.FullDPS = fullDPS.combinedDPS
 			env.player.output.FullDotDPS = fullDPS.TotalDotDPS
+			fullDPSWarnings = fullDPS.payabilityWarnings
+			fullDPSSkillCostEntries = fullDPS.skillCostAuditEntries
+			env.player.output.FullDPSSkillAvailability = fullDPS.skillAvailability
+			env.player.output.FullDPSActivity = fullDPS.activity
+			env.player.output.FullDPSActivityTruncated = fullDPS.activityTruncated
+		end
+		env.player.output.FullDPSPayabilityWarnings = fullDPSWarnings
+		env.player.output.EnergyShieldProtectsMana = env.modDB:Flag(nil, "EnergyShieldProtectsMana")
+		env.player.output.OptimizerSkillCostAudit = buildOptimizerSkillCostAudit(build, env, env.player.output, fullDPSSkillCostEntries)
+		if override and override.returnEnv then
+			return env.player.output, env
 		end
 		return env.player.output
-	end, env.player.output
+	end, env.player.output, env
 end
 
-local function getActiveSkillCount(activeSkill)
+getActiveSkillCount = function(activeSkill)
+	if not activeSkill then return 1, false end
 	if not activeSkill.socketGroup then
 		return 1, true
 	elseif activeSkill.socketGroup.groupCount then
@@ -139,6 +177,383 @@ local function getActiveSkillCount(activeSkill)
 	return 1, true
 end
 
+local function optimizerSkillCoordinateIndex(build)
+	local index = { bySkill = { }, byGroup = { }, groups = build and build.skillsTab and build.skillsTab.socketGroupList or { } }
+	for groupIndex, group in ipairs(index.groups) do
+		index.byGroup[group] = groupIndex
+		for skillIndex, skill in ipairs(group.displaySkillList or { }) do
+			index.bySkill[skill] = {
+				groupIndex = groupIndex,
+				skillIndex = skillIndex,
+				group = group.displayLabel or group.label or group.slot or "",
+			}
+		end
+	end
+	return index
+end
+
+local function optimizerSkillCoordinates(skill, index)
+	local coordinates = index.bySkill[skill]
+	if coordinates then return coordinates end
+	local socketGroup = skill and skill.socketGroup
+	local groupIndex = index.byGroup[socketGroup]
+	local effect = skill.activeEffect and skill.activeEffect.grantedEffect
+	local effectId = effect and (effect.id or effect.name)
+	local function matches(groupSkill)
+		local groupEffect = groupSkill.activeEffect and groupSkill.activeEffect.grantedEffect
+		local groupEffectId = groupEffect and (groupEffect.id or groupEffect.name)
+		return groupSkill == skill or (effectId ~= nil and effectId == groupEffectId
+			and tostring(skill.skillPartName or "") == tostring(groupSkill.skillPartName or ""))
+	end
+	local function findInGroup(candidateGroupIndex)
+		local group = index.groups[candidateGroupIndex]
+		for skillIndex, groupSkill in ipairs(group and group.displaySkillList or { }) do
+			if matches(groupSkill) then
+				return {
+					groupIndex = candidateGroupIndex,
+					skillIndex = skillIndex,
+					group = group.displayLabel or group.label or group.slot or "",
+				}
+			end
+		end
+	end
+	if groupIndex then
+		local exactGroupCoordinates = findInGroup(groupIndex)
+		if exactGroupCoordinates then return exactGroupCoordinates end
+	end
+	local matchesAcrossGroups = { }
+	for candidateGroupIndex in ipairs(index.groups) do
+		local groupCoordinates = findInGroup(candidateGroupIndex)
+		if groupCoordinates then matchesAcrossGroups[#matchesAcrossGroups + 1] = groupCoordinates end
+	end
+	if #matchesAcrossGroups == 1 then return matchesAcrossGroups[1] end
+	if #matchesAcrossGroups > 1 and socketGroup then
+		local socketLabel = tostring(socketGroup.displayLabel or socketGroup.label or socketGroup.slot or "")
+		local labelMatches = { }
+		for _, match in ipairs(matchesAcrossGroups) do
+			if match.group == socketLabel then labelMatches[#labelMatches + 1] = match end
+		end
+		if #labelMatches == 1 then return labelMatches[1] end
+	end
+	return nil
+end
+
+local function optimizerSkillAuditKey(skill, coordinates)
+	if type(coordinates) ~= "table" or type(coordinates.groupIndex) ~= "number" or type(coordinates.skillIndex) ~= "number" then
+		return nil
+	end
+	local effect = skill.activeEffect and skill.activeEffect.grantedEffect
+	return table.concat({ tostring(coordinates.groupIndex), tostring(coordinates.skillIndex),
+		tostring(effect and (effect.id or effect.name) or "unknown"), tostring(skill.skillPartName or "") }, "\31")
+end
+
+buildOptimizerSkillCostAudit = function(build, env, poolOutput, knownEntries)
+	local coordinateIndex = optimizerSkillCoordinateIndex(build)
+	local knownByKey = { }
+	for _, entry in ipairs(knownEntries or { }) do
+		if entry.auditKey then knownByKey[entry.auditKey] = entry end
+	end
+	local entries, disabledSkillCount, nonSocketedSkillCount = { }, 0, 0
+	for _, skill in ipairs(env.player.activeSkillList or { }) do
+		local skillCount, enabled = getActiveSkillCount(skill)
+		if enabled and not skill.socketGroup then
+			-- PoB supplies implicit actions such as Default Attack. They have no
+			-- socket-group toggle or build input, so they are outside the enabled
+			-- socketed-skill affordability contract.
+			nonSocketedSkillCount = nonSocketedSkillCount + 1
+		elseif enabled then
+			local coordinates = optimizerSkillCoordinates(skill, coordinateIndex)
+			local targetSkill = env.build and env.build.optimizerTargetSkill
+			if not coordinates and skill == env.player.mainSkill and type(targetSkill) == "table"
+				and type(targetSkill.groupIndex) == "number" and type(targetSkill.skillIndex) == "number" then
+				local group = coordinateIndex.groups[targetSkill.groupIndex]
+				coordinates = {
+					groupIndex = targetSkill.groupIndex,
+					skillIndex = targetSkill.skillIndex,
+					group = group and (group.displayLabel or group.label or group.slot) or "Selected Main Skill",
+				}
+			end
+			local auditKey = optimizerSkillAuditKey(skill, coordinates)
+			local exactEntry = auditKey and knownByKey[auditKey]
+			local skillOutput, payabilitySkill
+			local exactOutputAvailable, calculationError = false, nil
+			if skill == env.player.mainSkill then
+				skillOutput, payabilitySkill = poolOutput, skill
+				exactOutputAvailable = true
+			elseif exactEntry then
+				skillOutput, payabilitySkill = exactEntry.skillOutput, exactEntry.activeSkill
+				exactOutputAvailable = type(skillOutput) == "table"
+			else
+				local uuid = cacheSkillUUID(skill, env)
+				local ok
+				ok, calculationError = pcall(calcs.buildActiveSkill, env, "CALCULATOR", skill, uuid)
+				local cachedData = GlobalCache and GlobalCache.cachedData
+				local cached = ok and cachedData and cachedData.CALCULATOR and cachedData.CALCULATOR[uuid]
+				local cachedEnv = cached and cached.Env
+				if cachedEnv and cachedEnv.player and cachedEnv.player.output and cachedEnv.player.mainSkill then
+					skillOutput, payabilitySkill = cachedEnv.player.output, cachedEnv.player.mainSkill
+					exactOutputAvailable = true
+				else
+					payabilitySkill = skill
+					calculationError = calculationError or "PoB did not retain the exact per-skill calculation output"
+				end
+			end
+			local warnings = calcs.checkSkillPayability(poolOutput, skillOutput or { }, payabilitySkill or skill)
+			if not exactOutputAvailable or not auditKey then
+				warnings[#warnings + 1] = {
+					label = "Skill cost output",
+					reason = not exactOutputAvailable and ("PoB could not calculate the exact cost of this enabled skill"
+						.. (calculationError and (": " .. tostring(calculationError):sub(1, 160)) or ""))
+						or "PoB did not expose a stable socket-group and active-skill index for this exact cost row",
+				}
+			end
+			local activityRecord
+			if exactOutputAvailable then
+				local cachedData = GlobalCache and GlobalCache.cachedData
+				local cached = payabilitySkill and cachedData and cachedData.CALCULATOR
+					and cachedData.CALCULATOR[cacheSkillUUID(payabilitySkill, env)]
+				local cachedEnv = cached and cached.Env
+				activityRecord = calcs.getOptimizerActivityRecord(payabilitySkill or skill, skillOutput, skillCount,
+					cachedEnv and cachedEnv.minion and cachedEnv.minion.output)
+			end
+			entries[#entries + 1] = {
+				activeSkill = payabilitySkill or skill,
+				poolOutput = poolOutput,
+				skillOutput = skillOutput or { },
+				violations = warnings,
+				groupIndex = coordinates and coordinates.groupIndex,
+				skillIndex = coordinates and coordinates.skillIndex,
+				group = coordinates and coordinates.group or "",
+				count = skillCount,
+				activityRecord = activityRecord,
+			}
+		else
+			disabledSkillCount = disabledSkillCount + 1
+		end
+	end
+	return SkillCostAudit.Build(entries, disabledSkillCount, false, nonSocketedSkillCount)
+end
+
+local activityResourceDefinitions = {
+	{ key = "Life", pool = "Life", recovery = "Life" },
+	{ key = "Mana", pool = "Mana", recovery = "Mana" },
+	{ key = "ES", pool = "EnergyShield", recovery = "EnergyShield" },
+}
+
+local function hasAnyCostFlag(output, prefix)
+	return output[prefix .. "HasCost"] == true
+		or output[prefix .. "SecondHasCost"] == true
+		or output[prefix .. "PerSecondHasCost"] == true
+end
+
+local function getSkillCostRate(output, prefix, poolKey)
+	local rate = output[prefix .. "PerSecondCost"]
+	local percentPrefix = prefix .. "Percent"
+	local percentRate = output[percentPrefix .. "PerSecondCost"]
+	local hasFlatCost = hasAnyCostFlag(output, prefix)
+	local hasPercentCost = hasAnyCostFlag(output, percentPrefix)
+	if rate == nil and hasFlatCost then return nil end
+	if rate ~= nil and not isFinite(rate) then return nil end
+	rate = rate or 0
+	if percentRate ~= nil then
+		local pool = output[poolKey]
+		if not isFinite(percentRate) or not isFinite(pool) then return nil end
+		rate = rate + percentRate * pool / 100
+	elseif hasPercentCost then
+		return nil
+	end
+	return rate
+end
+
+local function isVaalSkill(activeSkill)
+	local skillTypes = activeSkill and activeSkill.skillTypes or { }
+	local vaalType = SkillType and SkillType.Vaal or "Vaal"
+	return skillTypes[vaalType] == true or skillTypes.Vaal == true
+end
+
+local optimizerActivityDamageKeys = {
+	"TotalDPS", "TotalDotDPS", "TotalDot", "TotalPoisonDPS", "TotalIgniteDPS", "IgniteDPS",
+	"BleedDPS", "CorruptingBloodDPS", "ImpaleDPS", "DecayDPS", "BurningGroundDPS", "CausticGroundDPS",
+}
+
+local function captureOptimizerActivityDamage(output)
+	local captured = { }
+	for _, key in ipairs(optimizerActivityDamageKeys) do
+		local value = output and output[key]
+		if isFinite(value) then captured[key] = value end
+	end
+	return next(captured) and captured or nil
+end
+
+function calcs.getOptimizerActivityRecord(activeSkill, skillOutput, count, damageOutput)
+	if not activeSkill or type(skillOutput) ~= "table" then return nil end
+	local effect = activeSkill.activeEffect and activeSkill.activeEffect.grantedEffect
+	local group = activeSkill.socketGroup or { }
+	local flags = activeSkill.skillFlags or { }
+	local damageOutput = damageOutput or skillOutput
+	local poBDamage = { }
+	local playerDamage = captureOptimizerActivityDamage(skillOutput)
+	local minionDamage = damageOutput ~= skillOutput and captureOptimizerActivityDamage(damageOutput) or nil
+	if playerDamage then poBDamage.player = playerDamage end
+	if minionDamage then poBDamage.minion = minionDamage end
+	if not next(poBDamage) then poBDamage = nil end
+	local damageKeys = { "TotalDPS", "TotalDot", "TotalPoisonDPS", "IgniteDPS", "BleedDPS", "ImpaleDPS", "DecayDPS", "BurningGroundDPS", "CausticGroundDPS", "CorruptingBloodDPS" }
+	local hasDamage = false
+	for _, key in ipairs(damageKeys) do
+		if isFinite(damageOutput[key]) and damageOutput[key] > 0 then hasDamage = true break end
+	end
+	local name = effect and effect.name or "Unknown skill"
+	local groupName = group.label or group.slot or ""
+	local sourceGemIndex
+	local sourceGem = activeSkill.activeEffect and activeSkill.activeEffect.srcInstance
+	if sourceGem then
+		for gemIndex, gem in ipairs(group.gemList or { }) do
+			if gem == sourceGem then
+				sourceGemIndex = gemIndex
+				break
+			end
+		end
+	end
+	local kind = "manual"
+	local unsupportedReason
+	if isVaalSkill(activeSkill) then
+		kind = "vaal"
+		unsupportedReason = "PoB does not model Vaal soul generation, prevention, or encounter recovery"
+	elseif flags.minion then
+		kind = "minion"
+		unsupportedReason = "PoB's damage snapshot does not certify minion summon, death, or replacement cadence"
+	elseif flags.totem then
+		kind = flags.ballista and "ballista" or "totem"
+		unsupportedReason = "PoB's damage snapshot does not certify totem replacement and placement cadence"
+	elseif flags.trap then
+		kind = "trap"
+		unsupportedReason = "PoB's damage snapshot does not certify trap stock, arming, and replacement cadence"
+	elseif flags.mine then
+		kind = "mine"
+		unsupportedReason = "PoB's damage snapshot does not certify mine stock, detonation, and replacement cadence"
+	elseif activeSkill.skillTypes and activeSkill.skillTypes[SkillType and SkillType.Brand or "Brand"] then
+		kind = "brand"
+		unsupportedReason = "PoB's damage snapshot does not certify brand attachment and refresh cadence"
+	elseif (activeSkill.skillData and activeSkill.skillData.triggered) or activeSkill.infoTrigger then
+		kind = "triggered"
+	end
+	local eventTriggerReason = EventTriggerModel.GetUnsupportedReason(activeSkill)
+	if eventTriggerReason then
+		unsupportedReason = unsupportedReason and (unsupportedReason .. "; " .. eventTriggerReason) or eventTriggerReason
+	end
+	local resources = { }
+	local exact = true
+	for _, definition in ipairs(activityResourceDefinitions) do
+		local cost = getSkillCostRate(skillOutput, definition.key, definition.pool)
+		if cost == nil then exact = false end
+		local regenKey = "OptimizerNet" .. definition.recovery .. "Regen"
+		local regen = skillOutput[regenKey]
+		if not isFinite(regen) then regen = skillOutput["Net" .. definition.recovery .. "Regen"] end
+		if not isFinite(regen) then regen = skillOutput[definition.recovery .. "RegenRecovery"] end
+		local leech = skillOutput[definition.recovery .. "LeechRate"]
+		local onHit = skillOutput[definition.recovery .. "OnHitRate"]
+		if not isFinite(leech) and isFinite(skillOutput[definition.recovery .. "LeechGainRate"]) then
+			leech = skillOutput[definition.recovery .. "LeechGainRate"]
+			onHit = 0
+		end
+		resources[definition.key] = {
+			cost = cost,
+			netRegen = isFinite(regen) and regen or nil,
+			leech = isFinite(leech) and leech or nil,
+			onHit = isFinite(onHit) and onHit or nil,
+		}
+	end
+	local otherResourceCosts = { }
+	for _, key in ipairs({ "Rage", "Soul" }) do
+		local rate = skillOutput[key .. "PerSecondCost"]
+		if isFinite(rate) then otherResourceCosts[key] = rate end
+	end
+	local identity = table.concat({ tostring(effect and effect.id or name), tostring(groupName), tostring(activeSkill.skillPartName or "") }, "\31")
+	return {
+		identity = identity,
+		-- The legacy activity identity intentionally remains effect/group/part.
+		-- A group may contain two copies of the same active gem, so exact study
+		-- producers also need the native source slot to distinguish their PoB
+		-- Full DPS rows without changing existing activity-schedule references.
+		sourceGemIndex = sourceGemIndex,
+		name = name,
+		group = groupName,
+		skillPart = activeSkill.skillPartName,
+		count = isFinite(count) and count or 1,
+		kind = kind,
+		hasDamage = hasDamage,
+		exact = exact,
+		triggerRate = skillOutput.SkillTriggerRate,
+		activityRate = skillOutput.Speed,
+		poBDamage = poBDamage,
+		resources = resources,
+		otherResourceCosts = otherResourceCosts,
+		unsupportedReason = unsupportedReason,
+	}
+end
+
+-- Capture every enabled summon skill in the active skill list, including groups
+-- excluded from FullDPS. PoB can calculate a configured gem count above the
+-- entity cap, so consumers that certify builds need both exact values.
+function calcs.getActiveSkillEntityLimits(activeSkillList, output, data)
+	local limits = { }
+	for _, activeSkill in ipairs(activeSkillList or { }) do
+		local socketGroup = activeSkill.socketGroup
+		if activeSkill.skillFlags and socketGroup
+			and socketGroup.enabled ~= false and socketGroup.slotEnabled ~= false then
+			local count, enabled = getActiveSkillCount(activeSkill)
+			if enabled then
+				local effect = activeSkill.activeEffect and activeSkill.activeEffect.grantedEffect
+				local group = socketGroup.label or socketGroup.slot or ""
+				if activeSkill.skillFlags.totem then
+					limits[#limits + 1] = {
+						name = effect and effect.name or "Unknown totem skill",
+						entityType = activeSkill.skillFlags.ballista and "ballista" or "totem",
+						count = count,
+						limit = calcs.getActiveTotemLimit(activeSkill),
+						group = group,
+					}
+				elseif activeSkill.skillFlags.minion and not activeSkill.skillFlags.disable and effect then
+					-- For capped minions, CalcPerform writes the effective summon count
+					-- for this exact scenario to output[minionData.limit]. Do not use
+					-- getActiveSkillCount here: it counts gem instances, not summons.
+					-- Item-triggered skills such as Manifest Dancing Dervishes remain in
+					-- the skill list while their trigger is inactive; the native output
+					-- correctly reports zero in that case.
+					local seenLimitKeys = { }
+					for _, minionType in ipairs(activeSkill.minionList or { }) do
+						local minionData = data and data.minions and data.minions[minionType]
+						if minionData and not minionData.hostile then
+							local limitKey = minionData.limit or (effect.id .. ":" .. minionType)
+							if not seenLimitKeys[limitKey] then
+								seenLimitKeys[limitKey] = true
+								local exactCount, exactLimit = count, 1
+								if minionData.limit then
+									exactLimit = output and output[minionData.limit]
+									-- This is the native effective summon count/cap. PoB
+									-- derives both from the same limit stat in CalcPerform.
+									-- Reuse it as the count so inactive conditional grants
+									-- (for example Dervishes without Rampage) remain zero.
+									exactCount = exactLimit
+								end
+								limits[#limits + 1] = {
+									name = effect.name or minionData.name or "Unknown minion skill",
+									entityType = "minion",
+									count = exactCount,
+									limit = exactLimit,
+									limitKey = minionData.limit,
+									group = group,
+								}
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+	return limits
+end
+
 function calcs.calcFullDPS(build, mode, override, specEnv)
 	local fullEnv, cachedPlayerDB, cachedEnemyDB, cachedMinionDB = calcs.initEnv(build, mode, override, specEnv)
 	local usedEnv = nil
@@ -147,6 +562,11 @@ function calcs.calcFullDPS(build, mode, override, specEnv)
 		combinedDPS = 0,
 		TotalDotDPS = 0,
 		skills = { },
+		activity = { },
+		activityTruncated = false,
+		skillAvailability = { },
+		payabilityWarnings = { },
+		skillCostAuditEntries = { },
 		TotalPoisonDPS = 0,
 		causticGroundDPS = 0,
 		impaleDPS = 0,
@@ -164,6 +584,7 @@ function calcs.calcFullDPS(build, mode, override, specEnv)
 	local igniteSource = ""
 	local burningGroundSource = ""
 	local causticGroundSource = ""
+	local skillCoordinateIndex = optimizerSkillCoordinateIndex(build)
 	
 	for _, activeSkill in ipairs(fullEnv.player.activeSkillList) do
 		if activeSkill.socketGroup and activeSkill.socketGroup.includeInFullDPS then
@@ -172,6 +593,42 @@ function calcs.calcFullDPS(build, mode, override, specEnv)
 				fullEnv.player.mainSkill = activeSkill
 				calcs.perform(fullEnv, true)
 				usedEnv = fullEnv
+				local activityRecord
+				if #fullDPS.activity < 64 then
+					activityRecord = calcs.getOptimizerActivityRecord(activeSkill, usedEnv.player.output, activeSkillCount, usedEnv.minion and usedEnv.minion.output)
+					fullDPS.activity[#fullDPS.activity + 1] = activityRecord
+				else
+					fullDPS.activityTruncated = true
+				end
+				local traumaModList = activeSkill.baseSkillModList or activeSkill.skillModList
+				if traumaModList and traumaModList:Flag(nil, "HasTrauma") then
+					fullDPS.skillAvailability[#fullDPS.skillAvailability + 1] = {
+						name = activeSkill.activeEffect.grantedEffect.name,
+						configuredStacks = activeSkill.skillModList:Sum("BASE", activeSkill.skillCfg, "Multiplier:TraumaStacks"),
+						sustainableStacks = usedEnv.player.output.SustainableTrauma,
+						maximumStacks = activeSkill.skillModList:Sum("BASE", activeSkill.skillCfg, "Multiplier:TraumaStacksMax"),
+						extraTraumaChance = activeSkill.skillModList:Sum("BASE", activeSkill.skillCfg, "ExtraTrauma"),
+						repeats = usedEnv.player.output.Repeats,
+					}
+				end
+				local payabilityWarnings = calcs.checkSkillPayability(usedEnv.player.output, usedEnv.player.output, activeSkill)
+				for _, violation in ipairs(payabilityWarnings) do
+					fullDPS.payabilityWarnings[#fullDPS.payabilityWarnings + 1] = violation
+				end
+				local coordinates = optimizerSkillCoordinates(activeSkill, skillCoordinateIndex)
+				local auditKey = optimizerSkillAuditKey(activeSkill, coordinates)
+				if auditKey then
+					fullDPS.skillCostAuditEntries[#fullDPS.skillCostAuditEntries + 1] = {
+						auditKey = auditKey,
+						activeSkill = activeSkill,
+						skillOutput = usedEnv.player.output,
+						groupIndex = coordinates.groupIndex,
+						skillIndex = coordinates.skillIndex,
+						group = coordinates.group,
+						count = activeSkillCount,
+						activityRecord = activityRecord,
+					}
+				end
 				local minionName = nil
 				if activeSkill.minion or usedEnv.minion then
 					if usedEnv.minion.output.TotalDPS and usedEnv.minion.output.TotalDPS > 0 then
@@ -385,6 +842,9 @@ function calcs.buildOutput(build, mode)
 	-- Build output for selected main skill
 	local env, cachedPlayerDB, cachedEnemyDB, cachedMinionDB = calcs.initEnv(build, mode)
 	calcs.perform(env)
+	env.player.output.SkillEntityLimits = calcs.getActiveSkillEntityLimits(env.player.activeSkillList, env.player.output, env.data)
+	local mainSkillCount, mainSkillEnabled = getActiveSkillCount(env.player.mainSkill)
+	env.player.output.OptimizerMainSkillActivity = mainSkillEnabled and calcs.getOptimizerActivityRecord(env.player.mainSkill, env.player.output, mainSkillCount, env.minion and env.minion.output) or nil
 
 	local output = env.player.output
 
@@ -395,44 +855,85 @@ function calcs.buildOutput(build, mode)
 	env.player.output.SkillDPS = fullDPS.skills
 	env.player.output.FullDPS = fullDPS.combinedDPS
 	env.player.output.FullDotDPS = fullDPS.TotalDotDPS
+	env.player.output.FullDPSActivity = fullDPS.activity
+	env.player.output.FullDPSActivityTruncated = fullDPS.activityTruncated
 
 	if mode == "MAIN" then
+		local skillCoordinates = { }
+		for groupIndex, group in ipairs(build.skillsTab.socketGroupList or { }) do
+			for skillIndex, groupSkill in ipairs(group.displaySkillList or { }) do
+				skillCoordinates[groupSkill] = {
+					groupIndex = groupIndex,
+					skillIndex = skillIndex,
+					group = group.displayLabel or group.label or group.slot or "",
+				}
+			end
+		end
+		local skillAuditEntries, disabledSkillCount, nonSocketedSkillCount = { }, 0, 0
 		for _, skill in ipairs(env.player.activeSkillList) do
 			local uuid = cacheSkillUUID(skill, env)
 			if not GlobalCache.cachedData[mode][uuid] then
 				calcs.buildActiveSkill(env, mode, skill, uuid)
 			end
+			local skillCount, skillEnabled = getActiveSkillCount(skill)
 			if GlobalCache.cachedData[mode][uuid] then
 				output.EnergyShieldProtectsMana = env.modDB:Flag(nil, "EnergyShieldProtectsMana")
-				for pool, costResource in pairs({["LifeUnreserved"] = "LifeCost", ["ManaUnreserved"] = "ManaCost", ["Rage"] = "RageCost", ["EnergyShield"] = "ESCost"}) do
-					local cachedCost = GlobalCache.cachedData[mode][uuid].Env.player.output[costResource]
-					if cachedCost then
-						local totalPool = (output.EnergyShieldProtectsMana and costResource == "ManaCost" and output["EnergyShield"] or 0) + (output[pool] or 0)
-						if totalPool < cachedCost then
-							local rawPool = pool:gsub("Unreserved$", "")
-							local reservation = GlobalCache.cachedData[mode][uuid].Env.player.mainSkill and GlobalCache.cachedData[mode][uuid].Env.player.mainSkill.skillData[rawPool .. "ReservedPercent"]
-							-- Skill has both cost and reservation check if there's available pool for raw cost before reservation
-							if not reservation or (reservation and (totalPool + m_ceil((output[rawPool] or 0) * reservation / 100)) < cachedCost) then
-								if env.player.mainSkill and env.player.mainSkill.activeEffect.grantedEffect.name == skill.activeEffect.grantedEffect.name then
-									output[costResource.."Warning"] = true
-								end
-								output[costResource.."WarningList"] = output[costResource.."WarningList"] or {}
-								t_insert(output[costResource.."WarningList"], skill.activeEffect.grantedEffect.name)
-							end
-						end
+				local cachedEnv = GlobalCache.cachedData[mode][uuid].Env
+				local cachedOutput = cachedEnv.player.output
+				local warnings = calcs.checkSkillPayability(output, cachedOutput, cachedEnv.player.mainSkill)
+				for _, warning in ipairs(warnings) do
+					if warning.warningKey and env.player.mainSkill and env.player.mainSkill.activeEffect.grantedEffect.name == skill.activeEffect.grantedEffect.name then
+						output[warning.warningKey] = true
 					end
+					output[warning.warningListKey] = output[warning.warningListKey] or { }
+					t_insert(output[warning.warningListKey], skill.activeEffect.grantedEffect.name)
 				end
-				for pool, costResource in pairs({["LifeUnreservedPercent"] = "LifePercentCost", ["ManaUnreservedPercent"] = "ManaPercentCost"}) do
-					local cachedCost = GlobalCache.cachedData[mode][uuid].Env.player.output[costResource]
-					if cachedCost then
-						if (output[pool] or 0) < cachedCost then
-							output[costResource.."PercentCostWarningList"] = output[costResource.."PercentCostWarningList"] or {}
-							t_insert(output[costResource.."PercentCostWarningList"], skill.activeEffect.grantedEffect.name)
-						end
-					end
+				if skillEnabled and skill.socketGroup then
+					local coordinates = skillCoordinates[skill] or { }
+					local activityRecord = calcs.getOptimizerActivityRecord(
+						cachedEnv.player.mainSkill,
+						cachedOutput,
+						skillCount,
+						cachedEnv.minion and cachedEnv.minion.output
+					)
+					skillAuditEntries[#skillAuditEntries + 1] = {
+						activeSkill = cachedEnv.player.mainSkill,
+						poolOutput = output,
+						skillOutput = cachedOutput,
+						violations = warnings,
+						groupIndex = coordinates.groupIndex,
+						skillIndex = coordinates.skillIndex,
+						group = coordinates.group or (skill.socketGroup and (skill.socketGroup.label or skill.socketGroup.slot)) or "",
+						count = skillCount,
+						activityRecord = activityRecord,
+					}
+				elseif skillEnabled then
+					nonSocketedSkillCount = nonSocketedSkillCount + 1
+				else
+					disabledSkillCount = disabledSkillCount + 1
 				end
+			elseif skillEnabled and skill.socketGroup then
+				local coordinates = skillCoordinates[skill] or { }
+				skillAuditEntries[#skillAuditEntries + 1] = {
+					activeSkill = skill,
+					poolOutput = output,
+					skillOutput = { },
+					violations = { {
+						label = "Skill cost output",
+						reason = "PoB did not create an exact cached calculation output for this enabled skill",
+					} },
+					groupIndex = coordinates.groupIndex,
+					skillIndex = coordinates.skillIndex,
+					group = coordinates.group or (skill.socketGroup and (skill.socketGroup.label or skill.socketGroup.slot)) or "",
+					count = skillCount,
+				}
+			elseif skillEnabled then
+				nonSocketedSkillCount = nonSocketedSkillCount + 1
+			else
+				disabledSkillCount = disabledSkillCount + 1
 			end
 		end
+		output.OptimizerSkillCostAudit = SkillCostAudit.Build(skillAuditEntries, disabledSkillCount, false, nonSocketedSkillCount)
 	
 		output.ExtraPoints = env.modDB:Sum("BASE", nil, "ExtraPoints")
 

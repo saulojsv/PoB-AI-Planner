@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pob-ai.local/schemas/run_spec.v1.json",
+  "title": "PoB AI Planner RunSpec v1",
+  "$defs": {
+    "skill": { "$ref": "#/$defs/skill" }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "modelMode", "searchMode", "skill", "scenario", "targets", "resistances", "crossSkillMode", "mutationAggressiveness", "graph", "budget"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "modelMode": { "enum": ["approved_or_fallback", "deterministic_fallback", "approved_gnn"] },
+    "modelPackageId": { "type": ["string", "null"], "maxLength": 128 },
+    "searchMode": { "enum": ["SINGLE_SKILL_ONLY", "CROSS_SKILL_COMBINATION"] },
+    "skill": { "$ref": "#/$defs/skill" },
+    "scenario": {
+      "type": "object", "additionalProperties": false, "required": ["profile", "enemyPreset"],
+      "properties": {
+        "profile": { "enum": ["Current", "PinnacleUnbuffed", "PinnacleChassis"] },
+        "enemyPreset": { "enum": ["Active", "None", "Boss", "Pinnacle", "Uber"] }
+      }
+    },
+    "targets": {
+      "type": "object", "additionalProperties": false,
+      "required": ["dps", "ehp", "elementalMaxHit", "physicalMaxHit"],
+      "properties": {
+        "dps": { "enum": ["TIER_1M_TO_5M", "TIER_5M_TO_10M", "TIER_10M_TO_25M", "TIER_25M_TO_50M", "TIER_50M_PLUS"] },
+        "ehp": { "enum": ["TIER_20K_TO_50K", "TIER_50K_TO_100K", "TIER_100K_PLUS"] },
+        "elementalMaxHit": { "enum": ["TIER_5K_TO_10K", "TIER_10K_TO_20K", "TIER_15K_TO_25K", "TIER_20K_PLUS"] },
+        "physicalMaxHit": { "enum": ["TIER_5K_TO_10K", "TIER_10K_TO_20K", "TIER_15K_TO_25K", "TIER_20K_PLUS"] }
+      }
+    },
+    "resistances": {
+      "type": "object", "additionalProperties": false, "required": ["elemental", "chaos"],
+      "properties": {
+        "elemental": { "enum": ["CAP_EFFECTIVE", "OVERCAP_30_ALL"] },
+        "chaos": { "enum": ["POSITIVE_OR_CAP", "CAP_EFFECTIVE"] }
+      }
+    },
+    "crossSkillMode": { "enum": ["SINGLE_SKILL_ONLY", "ALLOW_COC_AND_CWC", "ALLOW_SPELLSLINGER_AND_TRIGGERS", "ALLOW_DEBUFF_PRIMERS"] },
+    "mutationAggressiveness": { "enum": ["CONSERVATIVE_FINE_TUNE", "BALANCED_LOCAL_SEARCH", "AGGRESSIVE_CLUSTER_EXPANSION"] },
+    "graph": { "type": "object", "additionalProperties": false, "required": ["radius"], "properties": { "radius": { "enum": [2, 4, 6] } } },
+    "budget": {
+      "type": "object", "additionalProperties": false,
+      "required": ["minProposals", "maxExactEvaluations", "timeoutSeconds"],
+      "properties": {
+        "minProposals": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 1000 },
+        "maxExactEvaluations": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 5000 },
+        "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 3600, "default": 1800 }
+      }
+    }
+  }
+}

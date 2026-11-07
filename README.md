@@ -1,6 +1,16 @@
 # Path of Building Community
 ## Welcome to Path of Building, an offline build planner for Path of Exile!
 
+## PoB AI Planner integration
+
+This repository also maintains the integrated AI Planner extension. The native PoB calculator is the source of truth: the Planner proposes routes, and each result must pass an exact native recalculation before it can be selected.
+
+Managed AI Planner releases include an `AIPlannerManaged.release` marker. The in-app upstream updater is intentionally disabled for those packages so an official file replacement cannot silently remove the extension. To adopt a new PoB update, merge the official `master` or `dev` branch into this repository, pass the upstream compatibility workflow and optimizer contracts, then produce and install a new managed package with a backup. Do not apply an official update directly over a managed package.
+
+The daily **PoB upstream compatibility** workflow checks both official branches. It tests a temporary merge and runs PoB's LuaJIT test suite; it never merges into `main`, changes a local installation, or publishes a release automatically. See [`docs/optimizer/UPSTREAM_UPDATE_POLICY.md`](docs/optimizer/UPSTREAM_UPDATE_POLICY.md).
+
+Build XMLs, PoB share codes, imported profiles, and training shards are local project data and must not be committed to this public source repository.
+
 <p float="middle">
   <img alt="Tree tab" src="https://github.com/user-attachments/assets/0826b7ab-84ba-440f-be52-2f216f13e75c" width="48%" />
   <img alt="Items tab" src="https://github.com/user-attachments/assets/e5af1326-7e22-43d8-ab12-aa5500da611a" width="48%" />

@@ -18,11 +18,16 @@ def _exclude_file(file_patterns: set[str], path: pathlib.Path) -> bool:
 
 
 def _exclude_directory(directory_names: set[str], path: pathlib.Path) -> bool:
-    """Whether to exclude a directory. Doesn't consider any files in directories."""
+    """Whether a file is inside an excluded directory."""
+    # Match each glob against every path prefix. Testing only the complete
+    # file path against e.g. ``runtime/AIPlanner-*`` misses all files beneath
+    # that directory, and comparing path segments literally ignores ``*``.
+    # That can copy disposable QA runtimes into the release manifest.
+    prefixes = ["/".join(path.parts[:index]) for index in range(1, len(path.parts) + 1)]
     return any(
-        len(path.parts) <= 1
-        or all(a == b for a, b in zip(directory.split("/"), path.parts))
+        fnmatch.fnmatchcase(prefix, directory.rstrip("/"))
         for directory in directory_names
+        for prefix in prefixes
     )
 
 
@@ -93,7 +98,16 @@ def create_manifest(version: str | None = None, replace: bool = False) -> None:
         exclude_dirs = _parse_list_option(config, section, "exclude-directories")
         source = pathlib.Path(config[section]["path"])
         for path in source.glob("**/*.*"):
-            if include_files and not _exclude_file(include_files, path):
+            # pathlib's glob can include directory names containing a dot. Local
+            # QA packages live under runtime/, so skip those directories instead
+            # of trying to hash them as files.
+            if not path.is_file():
+                continue
+            # ``include-files`` names the files at the configured source root.
+            # Matching only path.name recursively pulls every nested
+            # changelog/help/LICENSE from disposable QA packages into the
+            # default release manifest.
+            if include_files and (path.parent != source or not _exclude_file(include_files, path)):
                 continue
             if include_dirs and not _exclude_directory(include_dirs, path):
                 continue

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "pob-ai-planner",
+  "version": "0.1.0",
+  "description": "Inspect and optimize the live Path of Building build with exact PoB calculations.",
+  "author": {
+    "name": "Local Path of Building Integration"
+  },
+  "keywords": ["path-of-building", "path-of-exile", "build-planner", "mcp"]
+}

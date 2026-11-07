@@ -10,6 +10,11 @@ local b_rshift = bit.rshift
 local band = bit.band
 local m_max = math.max
 local dkjson = require "dkjson"
+local ImportLifecycle = require("Modules.Optimizer.ImportLifecycle")
+
+local function isActiveImport(owner)
+	return owner.build and owner.build.importTab == owner and main.mode == "BUILD" and main.modes.BUILD == owner.build
+end
 
 
 
@@ -20,6 +25,17 @@ local realmList = {
 	{ label = "Xbox",    id = "XBOX", realmCode = "xbox", hostName = "https://www.pathofexile.com/", profileURL = "account/view-profile/" },
 	{ label = "Sony",    id = "SONY", realmCode = "sony", hostName = "https://www.pathofexile.com/", profileURL = "account/view-profile/" },
 }
+
+-- Tree and item downloads may run independently. Invalidate only older
+-- requests of the same component; never retain an account/character in a log.
+local function beginCharacterRequest(owner, component)
+	owner.plannerCharacterRequests = owner.plannerCharacterRequests or { }
+	local revision = (owner.plannerCharacterRequests[component] or 0) + 1
+	owner.plannerCharacterRequests[component] = revision
+	return function()
+		return isActiveImport(owner) and owner.plannerCharacterRequests[component] == revision
+	end
+end
 
 local function addOAuthControls(self)
 	self.usingOauth = true
@@ -254,10 +270,17 @@ local function addOAuthControls(self)
 
 			saveDetails(realm.id, league, selectedName)
 			local deleteJewels = self.controls.charImportTreeClearJewels.state
+			local requestCurrent = beginCharacterRequest(self, "tree")
 			local function importHandler(data, errMsg)
+				if not requestCurrent() then return end
+				local selected = self.controls.charSelect:GetSelValue()
+				if not selected or selected.label ~= selectedName or self.controls.accountRealm:GetSelValue().realmCode ~= realm.realmCode then
+					self.oauthLoading = false
+					return
+				end
 				if data and data.character then
 					self.oauthErrCode = nil
-					self:ImportPassiveTreeAndJewels(data.character, deleteJewels)
+					self:ImportPassiveTreeAndJewels(data.character, deleteJewels, realm.realmCode)
 				else
 					if errMsg then
 						self.oauthErrCode = "Could not import: " .. errMsg
@@ -270,6 +293,7 @@ local function addOAuthControls(self)
 			if self.build.spec:CountAllocNodes() > 0 then
 				main:OpenConfirmPopup("Character Import", "Importing the passive tree will overwrite your current tree.",
 					"Import", function()
+						if not requestCurrent() then return end
 						self.oauthLoading = true
 						main.api:DownloadCharacter(realm.realmCode, selectedName, importHandler)
 					end)
@@ -292,13 +316,20 @@ local function addOAuthControls(self)
 			saveDetails(realm.id, league, selectedName)
 
 			self.oauthLoading = true
+			local requestCurrent = beginCharacterRequest(self, "items")
+			local clearItems = self.controls.charImportItemsClearItems.state
+			local clearSkills = self.controls.charImportItemsClearSkills.state
+			local ignoreWeaponSwap = self.controls.charImportItemsIgnoreWeaponSwap.state
 			main.api:DownloadCharacter(realm.realmCode, selectedName, function(data, errMsg)
-				local clearItems = self.controls.charImportItemsClearItems.state
-				local clearSkills = self.controls.charImportItemsClearSkills.state
-				local ignoreWeaponSwap = self.controls.charImportItemsIgnoreWeaponSwap.state
+				if not requestCurrent() then return end
+				local selected = self.controls.charSelect:GetSelValue()
+				if not selected or selected.label ~= selectedName or self.controls.accountRealm:GetSelValue().realmCode ~= realm.realmCode then
+					self.oauthLoading = false
+					return
+				end
 				if data and data.character then
 					self.oauthErrCode = nil
-					self:ImportItemsAndSkills(data.character, clearItems, clearSkills, ignoreWeaponSwap)
+					self:ImportItemsAndSkills(data.character, clearItems, clearSkills, ignoreWeaponSwap, realm.realmCode)
 				else
 					if errMsg then
 						self.oauthErrCode = "Could not import: " .. errMsg
@@ -572,22 +603,34 @@ function ImportTabClass:ImportTab(build)
 	self.controls.generateCodeNote = new("LabelControl"):LabelControl({"TOPLEFT",self.controls.generateCodeOut,"BOTTOMLEFT"}, {0, 4, 0, 14}, "^7Note: this code can be very long; you can use 'Share' to shrink it.")
 	self.controls.importCodeHeader = new("LabelControl"):LabelControl({"TOPLEFT",self.controls.generateCodeNote,"BOTTOMLEFT"}, {0, 26, 0, 16}, "^7To import a build, enter URL or code here:")
 
-	local importCodeHandle = function (buf)
+	local importCodeHandle = function (buf, origin, originLink)
+		local revision = ImportLifecycle.Begin(self, origin)
 		self.importCodeSite = nil
 		self.importCodeDetail = ""
 		self.importCodeXML = nil
 		self.importCodeValid = false
 		self.importCodeJson = nil
+		self.importCodeFetching = false
+		self.importCodeCoverage = nil
+		self.importCodeOrigin = origin or { kind = "build_code" }
+		self.importCodeOriginLink = originLink
 
 		if #buf == 0 then
 			return
 		end
+		local maxBuildCodeBytes = buildSites.MAX_BUILD_CODE_BYTES or 16777216
+		if #buf > maxBuildCodeBytes then
+			ImportLifecycle.Update(self, revision, "invalid_preview", "download_too_large")
+			self.importCodeDetail = colorCodes.NEGATIVE..ImportLifecycle.FailureMessage("download_too_large")
+			return
+		end
 
-		if not self.build.dbFileName then
+		if not self.build.dbFileName and self.controls.importCodeMode.selIndex ~= 3 then
 			self.controls.importCodeMode.selIndex = 2
 		end
 
 		self.importCodeDetail = colorCodes.NEGATIVE.."Invalid input"
+		ImportLifecycle.Update(self, revision, "invalid_preview", "invalid_code")
 		local urlText = buf:gsub("^[%s?]+", ""):gsub("[%s?]+$", "") -- Quick Trim
 		if urlText:match("youtube%.com/redirect%?") or urlText:match("google%.com/url%?") then
 			local nested_url = urlText:gsub(".*[?&]q=([^&]+).*", "%1")
@@ -600,6 +643,10 @@ function ImportTabClass:ImportTab(build)
 				self.importCodeValid = true
 				self.importCodeDetail = colorCodes.POSITIVE.."URL is valid ("..buildSites.websiteList[j].label..")"
 				self.importCodeSite = j
+				self.importCodeOrigin = { kind = "provider_url", providerId = buildSites.websiteList[j].id }
+				self.plannerImportAttempt.kind = "provider_url"
+				self.plannerImportAttempt.providerId = buildSites.websiteList[j].id
+				ImportLifecycle.Update(self, revision, "valid_preview")
 				if buf ~= urlText then
 					self.controls.importCodeIn:SetText(urlText, false)
 				end
@@ -626,19 +673,31 @@ function ImportTabClass:ImportTab(build)
 			self.importCodeJson = jsonData
 			self.importCodeDetail = colorCodes.POSITIVE.."JSON is valid"
 			self.importCodeValid = true
+			self.importCodeOrigin = { kind = "character_payload" }
+			self.plannerImportAttempt.kind = "character_payload"
+			ImportLifecycle.Update(self, revision, "valid_preview")
 			return
 		end
 
-		local xmlText = Inflate(common.base64.decode(buf:gsub("-","+"):gsub("_","/")))
+		local xmlText, coverageOrReason = ImportLifecycle.DecodeBuildCode(buf)
 		if not xmlText then
+			local reason = coverageOrReason or "invalid_code"
+			local previewFailure = reason == "payload_too_large" or reason == "invalid_xml"
+				or reason == "wrong_root" or reason == "unsupported_target"
+			local status = previewFailure and "invalid_preview" or "decode_failed"
+			ImportLifecycle.Update(self, revision, status, reason)
+			self.importCodeDetail = colorCodes.NEGATIVE..ImportLifecycle.FailureMessage(reason)
 			return
 		end
+		local coverage = coverageOrReason
 		if launch.devMode and IsKeyDown("SHIFT") then
 			Copy(xmlText)
 		end
 		self.importCodeValid = true
-		self.importCodeDetail = colorCodes.POSITIVE.."Code is valid"
+		self.importCodeDetail = colorCodes.POSITIVE..(coverage.requiresConversion and "XML reconhecido; requer conversão nativa" or "XML PoB reconhecido; revise o diagnóstico após importar")
 		self.importCodeXML = xmlText
+		self.importCodeCoverage = coverage
+		ImportLifecycle.Update(self, revision, "valid_preview", nil, coverage.sectionCoverage)
 	end
 
 	local importSelectedBuild = function()
@@ -646,25 +705,131 @@ function ImportTabClass:ImportTab(build)
 			return
 		end
 
-		if self.controls.importCodeMode.selIndex == 1 then
-			main:OpenConfirmPopup("Build Import", colorCodes.WARNING.."Warning:^7 Importing to the current build will erase ALL existing data for this build.", "Import", function()
-				self.build:Shutdown()
-				self.build:Init(self.build.dbFileName, self.build.buildName, self.importCodeXML, false, self.importCodeSite and self.controls.importCodeIn.buf or nil)
-				self.build.viewMode = "TREE"
-			end)
-		elseif self.controls.importCodeMode.selIndex == 3 then
+		local payload = self.importCodeXML
+		local revision = self.plannerImportAttempt.revision
+		local source, link = self.importCodeOrigin, self.importCodeOriginLink
+		local mode = self.controls.importCodeMode.selIndex
+		local target = mode == 1 and "current" or mode == 3 and "comparison" or "new"
+		local coverage, reason = ImportLifecycle.ValidateXML(payload)
+		if not coverage then
+			ImportLifecycle.Update(self, revision, "invalid_preview", reason)
+			self.importCodeValid = false
+			self.importCodeDetail = colorCodes.NEGATIVE..ImportLifecycle.FailureMessage(reason)
+			return
+		end
+		local function stillCurrent()
+			return isActiveImport(self) and ImportLifecycle.IsCurrent(self, revision) and self.importCodeXML == payload
+		end
+		if not stillCurrent() then return end
+		if mode == 3 then
 			-- Import as comparison build
 			if self.build.compareTab then
-				if self.build.compareTab:ImportBuild(self.importCodeXML, "Imported comparison") then
+				local ok, imported = pcall(self.build.compareTab.ImportBuild, self.build.compareTab, payload, "Imported comparison")
+				if ok and imported then
+					local entry = self.build.compareTab.compareEntries[self.build.compareTab.activeCompareIndex]
+					ImportLifecycle.AdoptLoaded(entry, source, coverage.sectionCoverage, target)
+					ImportLifecycle.Update(self, revision, "loaded", nil, coverage.sectionCoverage)
+					self.plannerImportAttempt.target = target
 					self.build.viewMode = "COMPARE"
 				else
+					ImportLifecycle.Update(self, revision, "native_load_unconfirmed", "native_load_failed")
 					main:OpenMessagePopup("Import Error", "Failed to import build for comparison.")
 				end
 			end
+			return
+		end
+		-- Use the existing isolated native loader/calculator before shutting down
+		-- the active build. XML framing alone is not a successful native load.
+		local previewOK, preview = pcall(function() return new("CompareEntry"):CompareEntry(payload, "Import preview") end)
+		self.build.spec:SetWindowTitleWithBuildClass()
+		if not previewOK or not preview or not preview.spec or not preview.calcsTab or not preview.calcsTab.mainOutput then
+			ImportLifecycle.Update(self, revision, "native_load_unconfirmed", "native_load_failed")
+			self.importCodeDetail = colorCodes.NEGATIVE..ImportLifecycle.FailureMessage("native_load_failed")
+			return
+		end
+		preview = nil -- Do not retain a second calculator environment in the UI.
+		local function recordFailedImport(reason, detail)
+			self.importCodeIsArchivedSeed = false
+			local owner = self.build.importTab or self
+			local failedRevision = ImportLifecycle.Begin(owner, source)
+			ImportLifecycle.Update(owner, failedRevision, "native_load_unconfirmed", reason, coverage.sectionCoverage)
+			owner.plannerImportAttempt.target = target
+			owner.importCodeFetching = false
+			owner.importCodeValid = false
+			owner.importCodeDetail = colorCodes.NEGATIVE..ImportLifecycle.FailureMessage(reason)
+			local message = ImportLifecycle.FailureMessage(reason)
+			if detail then message = message .. "\n" .. detail end
+			main:OpenMessagePopup("Import Error", message)
+		end
+		local function applyImport()
+			if not stillCurrent() then return end
+			-- Keep a native, in-memory recovery snapshot until the replacement has
+			-- reached Build.Init's successful tail. Import is uncommon, so this
+			-- serialization cost is preferable to losing unsaved source state if
+			-- the second native load fails after the isolated preview passed.
+			local snapshotOk, sourceXML = pcall(self.build.SaveDB, self.build, self.build.buildName or "Import recovery")
+			if not snapshotOk or type(sourceXML) ~= "string" then
+				recordFailedImport("source_snapshot_failed")
+				return
+			end
+			local sourceState = {
+				xml = sourceXML,
+				dbFileName = self.build.dbFileName,
+				buildName = self.build.buildName,
+				importLink = self.build.importLink,
+				viewMode = self.build.viewMode,
+				unsaved = self.build.unsaved,
+				modFlag = self.build.modFlag,
+			}
+			local archivedSeedPlannerPreferences
+			if self.importCodeIsArchivedSeed and self.build.optimizerTab
+				and type(self.build.optimizerTab.CaptureArchivedSeedPreferences) == "function" then
+				archivedSeedPlannerPreferences = self.build.optimizerTab:CaptureArchivedSeedPreferences()
+			end
+			self.importCodeIsArchivedSeed = false
+			ImportLifecycle.Update(self, revision, "applying")
+			local fileName = mode == 1 and self.build.dbFileName or false
+			local buildName = mode == 1 and self.build.buildName or self.importCodeDisplayName or "Imported build"
+			self.importCodeDisplayName = nil
+			local failureReason = "native_shutdown_failed"
+			local committed = pcall(function()
+				self.build:Shutdown()
+				failureReason = "native_load_failed"
+				self.build:Init(fileName, buildName, payload, coverage.requiresConversion, link,
+					archivedSeedPlannerPreferences)
+				local owner = self.build.importTab
+				if owner == self or self.build.abortSave ~= false or not self.build.calcsTab or not self.build.calcsTab.mainOutput then
+					error("Native import did not reach a calculable state")
+				end
+				failureReason = "native_commit_failed"
+				ImportLifecycle.AdoptLoaded(owner, source, coverage.sectionCoverage, target)
+				self.build.viewMode = "TREE"
+			end)
+			if committed then return end
+
+			-- Prevent Shutdown from auto-saving a partially initialized import
+			-- over the user's source file, then rebuild the source through PoB's
+			-- own loader. The original tab/spec are never transplanted by hand.
+			self.build.abortSave = true
+			pcall(self.build.Shutdown, self.build)
+			local restoreOk = pcall(self.build.Init, self.build, sourceState.dbFileName, sourceState.buildName,
+				sourceState.xml, false, sourceState.importLink)
+			local restored = restoreOk and self.build.abortSave == false
+			if restored then
+				self.build.viewMode = sourceState.viewMode
+				self.build.unsaved = sourceState.unsaved
+				self.build.modFlag = sourceState.modFlag
+				recordFailedImport(failureReason, "A build anterior foi restaurada; a importação não foi aplicada.")
+			else
+				recordFailedImport("source_restore_failed")
+			end
+		end
+		if mode == 1 or coverage.requiresConversion then
+			local warning = mode == 1 and "Importing to the current build will erase ALL existing data for this build." or "Import to a new build."
+			if coverage.requiresConversion then warning = warning .. " Native game-version conversion is required and may deallocate passives. Keep a backup before continuing." end
+			main:OpenConfirmPopup("Build Import", colorCodes.WARNING.."Warning:^7 "..warning, "Import", applyImport)
 		else
-			self.build:Shutdown()
-			self.build:Init(false, "Imported build", self.importCodeXML, false, self.importCodeSite and self.controls.importCodeIn.buf or nil)
-			self.build.viewMode = "TREE"
+			applyImport()
 		end
 	end
 
@@ -685,14 +850,34 @@ function ImportTabClass:ImportTab(build)
 	self.controls.importCodeGo = new("ButtonControl"):ButtonControl({"LEFT",self.controls.importCodeMode,"RIGHT"}, {8, 0, 160, 20}, "Import", function()
 		if self.importCodeSite and not self.importCodeXML then
 			self.importCodeFetching = true
+			local revision = self.plannerImportAttempt.revision
+			local source = self.importCodeOrigin
+			local inputLink = self.controls.importCodeIn.buf
+			local mode = self.controls.importCodeMode.selIndex
+			ImportLifecycle.Update(self, revision, "fetching")
 			local selectedWebsite = buildSites.websiteList[self.importCodeSite]
-			buildSites.DownloadBuild(self.controls.importCodeIn.buf, selectedWebsite, function(isSuccess, data)
+			buildSites.DownloadBuild(inputLink, selectedWebsite, function(isSuccess, data, _, providerFailureReason)
+				if not isActiveImport(self) or not ImportLifecycle.IsCurrent(self, revision) or not self.importCodeFetching then return end
+				if self.controls.importCodeIn.buf ~= inputLink or self.controls.importCodeMode.selIndex ~= mode then
+					self.importCodeFetching = false
+					ImportLifecycle.Update(self, revision, "valid_preview")
+					return
+				end
 				self.importCodeFetching = false
 				if not isSuccess then
-					self.importCodeDetail = colorCodes.NEGATIVE..data
+					local reason = providerFailureReason
+					if not reason then
+						if data == "Download information not found" then reason = "provider_unresolved"
+						elseif data == "Link does not match selected provider" then reason = "provider_link_mismatch"
+						elseif data == "Invalid build link" or data == "Invalid link for selected provider" or data == "Invalid PoBB profile build URL" then reason = "provider_link_invalid"
+						else reason = "download_failed" end
+					end
+					ImportLifecycle.Update(self, revision, "download_failed", reason)
+					self.importCodeDetail = colorCodes.NEGATIVE..ImportLifecycle.FailureMessage(reason)
 					self.importCodeValid = false
 				else
-					importCodeHandle(data)
+					importCodeHandle(data, source, inputLink)
+					self.controls.importCodeMode.selIndex = mode
 					importSelectedBuild()
 				end
 			end)
@@ -718,6 +903,33 @@ function ImportTabClass:ImportTab(build)
 			self.controls.importCodeGo.onClick()
 		end
 	end
+	-- Route Planner archive picker: use the same bounded XML validation,
+	-- isolated native preview, recovery snapshot, and PoB loader as manual import.
+	self.ImportArchivedSeed = function(owner, xmlText, displayName)
+		self.importCodeIsArchivedSeed = false
+		if owner ~= self or not isActiveImport(self) then
+			return false, "A build-semente só pode ser aberta a partir da build ativa do PoB."
+		end
+		local coverage, reason = ImportLifecycle.ValidateXML(xmlText)
+		if not coverage then return false, ImportLifecycle.FailureMessage(reason) end
+		local cleanName = type(displayName) == "string" and displayName:gsub("%c", " "):gsub("%s+", " "):sub(1, 120) or ""
+		if cleanName == "" then cleanName = "Build-semente arquivada" end
+		self.importCodeSite = nil
+		self.importCodeXML = xmlText
+		self.importCodeValid = true
+		self.importCodeJson = nil
+		self.importCodeFetching = false
+		self.importCodeCoverage = coverage
+		self.importCodeOrigin = { kind = "build_code" }
+		self.importCodeIsArchivedSeed = true
+		self.importCodeOriginLink = nil
+		self.importCodeDisplayName = cleanName
+		local revision = ImportLifecycle.Begin(self, self.importCodeOrigin)
+		ImportLifecycle.Update(self, revision, "valid_preview", nil, coverage.sectionCoverage)
+		self.controls.importCodeMode:SetSel(2, true)
+		importSelectedBuild()
+		return true
+	end
 
 	-- validate the status of the api the first time
 	if main.api.authToken then
@@ -740,6 +952,7 @@ function ImportTabClass:TryFetchCharacterList()
 end
 
 function ImportTabClass:Load(xml, fileName)
+	ImportLifecycle.Load(self, xml)
 	self.lastRealm = xml.attrib.lastRealm
 	self.lastLeague = xml.attrib.lastLeague
 	self.lastAccountHash = xml.attrib.lastAccountHash
@@ -771,6 +984,7 @@ function ImportTabClass:Save(xml)
 	end
 	-- Gets rid of erroneous, potentially infinitely nested full base64 XML stored as an import link
 	xml.attrib.importLink = (xml.attrib.importLink and xml.attrib.importLink:len() < 100) and xml.attrib.importLink or nil
+	ImportLifecycle.Save(self, xml)
 end
 
 function ImportTabClass:Draw(viewPort, inputEvents)
@@ -812,16 +1026,25 @@ function ImportTabClass:SaveAccountHistory()
 end
 
 function ImportTabClass:DownloadPassiveTree(realm)
+	local requestCurrent = beginCharacterRequest(self, "tree")
 	self.charImportMode = "IMPORTING"
 	self.charImportStatus = "Retrieving character passive tree..."
 	local accountName = self.controls.siteAccountName.buf
 	local charSelect = self.controls.siteCharSelect
 	local charListData = charSelect.list[charSelect.selIndex].char
+	local deleteJewels = self.controls.siteCharImportTreeClearJewels.state
 	launch:DownloadPage(
 	realm.hostName ..
 	"character-window/get-passive-skills?accountName=" ..
 	accountName:gsub("#", "%%23") .. "&character=" .. urlEncode(charListData.name) .. "&realm=" .. realm.realmCode,
 		function(response, errMsg)
+			if not requestCurrent() then return end
+			local selected = charSelect.list[charSelect.selIndex]
+			if not selected or not selected.char or selected.char.name ~= charListData.name
+				or self.controls.siteAccountName.buf ~= accountName or self.controls.siteAccountRealm:GetSelValue().realmCode ~= realm.realmCode then
+				self.charImportMode = "SELECTCHAR"
+				return
+			end
 			self.charImportMode = "SELECTCHAR"
 			if errMsg then
 				self.charImportStatus = colorCodes.NEGATIVE ..
@@ -844,22 +1067,32 @@ function ImportTabClass:DownloadPassiveTree(realm)
 			local charData = copyTable(charListData)
 			charData.passives = responseLua
 			charData.jewels = responseLua.items
-			local deleteJewels = self.controls.siteCharImportTreeClearJewels.state
-			self:ImportPassiveTreeAndJewels(charData, deleteJewels)
+			self:ImportPassiveTreeAndJewels(charData, deleteJewels, realm.realmCode)
 		end)
 end
 
 function ImportTabClass:DownloadItems(realm)
+	local requestCurrent = beginCharacterRequest(self, "items")
 	self.charImportMode = "IMPORTING"
 	self.charImportStatus = "Retrieving character items..."
 	local accountName = self.controls.siteAccountName.buf
 	local charSelect = self.controls.siteCharSelect
 	local charListData = charSelect.list[charSelect.selIndex].char
+	local clearItems = self.controls.siteCharImportItemsClearItems.state
+	local clearSkills = self.controls.siteCharImportItemsClearSkills.state
+	local ignoreWeaponSwap = self.controls.siteCharImportItemsIgnoreWeaponSwap.state
 	launch:DownloadPage(
 	realm.hostName ..
 	"character-window/get-items?accountName=" ..
 		accountName:gsub("#", "%%23") .. "&character=" .. urlEncode(charListData.name) .. "&realm=" .. realm.realmCode,
 		function(response, errMsg)
+			if not requestCurrent() then return end
+			local selected = charSelect.list[charSelect.selIndex]
+			if not selected or not selected.char or selected.char.name ~= charListData.name
+				or self.controls.siteAccountName.buf ~= accountName or self.controls.siteAccountRealm:GetSelValue().realmCode ~= realm.realmCode then
+				self.charImportMode = "SELECTCHAR"
+				return
+			end
 			self.charImportMode = "SELECTCHAR"
 			if errMsg then
 				self.charImportStatus = colorCodes.NEGATIVE ..
@@ -878,10 +1111,7 @@ function ImportTabClass:DownloadItems(realm)
 			local charData = copyTable(charListData)
 			charData.equipment = responseLua.items
 			charData.guardian = responseLua.guardian
-			local clearItems = self.controls.siteCharImportItemsClearItems.state
-			local clearSkills = self.controls.siteCharImportItemsClearSkills.state
-			local ignoreWeaponSwap = self.controls.siteCharImportItemsIgnoreWeaponSwap.state
-			self:ImportItemsAndSkills(charData, clearItems, clearSkills, ignoreWeaponSwap)
+			self:ImportItemsAndSkills(charData, clearItems, clearSkills, ignoreWeaponSwap, realm.realmCode)
 		end)
 end
 function ImportTabClass:DownloadSiteCharacterList(realm)
@@ -1128,7 +1358,7 @@ end
 --- @param charData CharacterPassivesData
 --- @param deleteJewels boolean
 --- @return string
-function ImportTabClass:ImportPassiveTreeAndJewels(charData, deleteJewels)
+function ImportTabClass:ImportPassiveTreeAndJewels(charData, deleteJewels, sourceRealm)
 	local charPassives = copyTable(charData.passives)
 
 	-- fix table keys being strings
@@ -1249,6 +1479,7 @@ function ImportTabClass:ImportPassiveTreeAndJewels(charData, deleteJewels)
 
 	main:SetWindowTitleSubtext(string.format("%s (%s, %s, %s)", self.build.buildName, charData.name, charData.class,
 		charData.league))
+	ImportLifecycle.Observe(self, "tree", { kind = "character_payload" }, deleteJewels and "replace" or "replace_tree_keep_jewels", charData, sourceRealm)
 	return colorCodes.POSITIVE.."Passive tree and jewels successfully imported."
 end
 
@@ -1378,7 +1609,7 @@ end
 --- @param clearSkills boolean
 --- @param ignoreWeaponSwap boolean
 --- @return CharacterItemsData, string
-function ImportTabClass:ImportItemsAndSkills(charData, clearItems, clearSkills, ignoreWeaponSwap)
+function ImportTabClass:ImportItemsAndSkills(charData, clearItems, clearSkills, ignoreWeaponSwap, sourceRealm)
 	charData = copyTable(charData)
 	if clearItems then
 		for _, slot in pairs(self.build.itemsTab.slots) do
@@ -1486,6 +1717,8 @@ function ImportTabClass:ImportItemsAndSkills(charData, clearItems, clearSkills, 
 	self.build.configTab:UpdateLevel()
 	self.build.controls.characterLevel:SetText(tostring(charData.level))
 	self.build.buildFlag = true
+	ImportLifecycle.Observe(self, "items", { kind = "character_payload" }, clearItems and "replace" or "merge", charData, sourceRealm)
+	ImportLifecycle.Observe(self, "skills", { kind = "character_payload" }, clearSkills and "replace" or "merge", charData, sourceRealm)
 	-- charData for the wrapper
 	return charData, colorCodes.POSITIVE .. "Items and skills successfully imported."
 end

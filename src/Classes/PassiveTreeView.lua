@@ -19,6 +19,7 @@ local JEWEL_RADIUS_TINT_PRIMARY_ONLY = { 1, 0, 0, 0.7 }
 local JEWEL_RADIUS_TINT_COMPARE_ONLY = { 0, 1, 0, 0.7 }
 
 local gemTooltip = require("Classes.GemTooltip")
+local SpatialZones = require("Modules.Optimizer.SpatialZones")
 
 local function isAbyssConquered(node)
 	local conqueror = node and node.conqueredBy and node.conqueredBy.conqueror
@@ -193,10 +194,130 @@ function PassiveTreeViewClass:GetCompareNodeColor(node, compareNode, spec, build
 	return nodeDefaultColor
 end
 
+function PassiveTreeViewClass:DrawOptimizerZones(build, viewPort, treeToScreen, scale)
+	if not self.zoneEditMode or self.zoneEditSpec ~= build.spec or not self.zoneMetadata then return end
+	-- Keep the zone tint and labels above passive artwork (layer 25) but below tooltips (layer 100).
+	SetDrawLayer(nil, 30)
+	local metadata = self.zoneMetadata
+	local centerX, centerY = treeToScreen(metadata.centerX, metadata.centerY)
+	local left, top = viewPort.x, viewPort.y
+	local right, bottom = viewPort.x + viewPort.width, viewPort.y + viewPort.height
+	local splitX = m_min(m_max(centerX, left), right)
+	local splitY = m_min(m_max(centerY, top), bottom)
+	local optimizerTab = build.optimizerTab
+	local instructionHeight = self.zoneEditNotice and 40 or 24
+	SetDrawColor(0.02, 0.025, 0.035, 0.96)
+	DrawImage(nil, left, top, right - left, instructionHeight)
+	SetDrawColor(1, 1, 1)
+	DrawString(left + 8, top + 5, "LEFT", 14, "VAR", "^7AI Planner zones: click allow  |  Shift+click require  |  right-click forbid")
+	if self.zoneEditNotice then
+		DrawString(left + 8, top + 23, "LEFT", 14, "VAR", "^xFF7780" .. tostring(self.zoneEditNotice))
+	end
+	local regions = {
+		{ name = "NorthWest", short = "NW", x = left, y = top, width = splitX - left, height = splitY - top },
+		{ name = "NorthEast", short = "NE", x = splitX, y = top, width = right - splitX, height = splitY - top },
+		{ name = "SouthWest", short = "SW", x = left, y = splitY, width = splitX - left, height = bottom - splitY },
+		{ name = "SouthEast", short = "SE", x = splitX, y = splitY, width = right - splitX, height = bottom - splitY },
+	}
+	local colors = {
+		allowed = { 0.12, 0.72, 0.27, 0.10, "^x72E28A", "ALLOW" },
+		required = { 0.12, 0.48, 0.95, 0.16, "^x75C9FF", "REQUIRED" },
+		forbidden = { 0.86, 0.12, 0.16, 0.16, "^xFF7780", "BLOCKED" },
+		excluded = { 0.86, 0.12, 0.16, 0.16, "^xFF7780", "OUTSIDE ALLOWLIST" },
+		transit = { 0.95, 0.67, 0.10, 0.10, "^xFFD36B", "COSTED TRANSIT" },
+		open = { 0.35, 0.45, 0.58, 0.035, "^xC1CAD6", "OPEN" },
+	}
+	for _, region in ipairs(regions) do
+		local state = optimizerTab and optimizerTab:GetSpatialRegionState(region.name) or "open"
+		local color = colors[state] or colors.open
+		if region.width > 0 and region.height > 0 then
+			SetDrawColor(color[1], color[2], color[3], color[4])
+			DrawImage(nil, region.x, region.y, region.width, region.height)
+			SetDrawColor(1, 1, 1)
+			local labelY = region.y == top and (top + instructionHeight + 6) or (bottom - 20)
+			local labelX = region.x + math.min(12, region.width / 8)
+			local labelAlign = "LEFT"
+			if region.short == "NE" or region.short == "SE" then
+				labelX = region.x + region.width - 12
+				labelAlign = "RIGHT_X"
+			end
+			local minimumLabelHeight = region.y == top and instructionHeight + 26 or 38
+			if region.width >= 90 and region.height >= minimumLabelHeight then
+				local labelBackgroundWidth = 180
+				local labelBackgroundX = labelAlign == "RIGHT_X" and (labelX - labelBackgroundWidth + 6) or (labelX - 6)
+				SetDrawColor(0.02, 0.025, 0.035, 0.92)
+				DrawImage(nil, labelBackgroundX, labelY - 3, labelBackgroundWidth, 20)
+				SetDrawColor(1, 1, 1)
+				DrawString(labelX, labelY, labelAlign, 14, "VAR", color[5] .. region.short .. "  " .. color[6])
+			end
+		end
+	end
+
+	local hubState = optimizerTab and optimizerTab:GetSpatialRegionState("Hub") or "open"
+	local hubColor = colors[hubState] or colors.open
+	local hubRadius = metadata.hubRadius * scale
+	if hubRadius > 2 and centerX - hubRadius >= left and centerX + hubRadius <= right
+		and centerY - hubRadius >= top and centerY + hubRadius <= bottom then
+		SetDrawColor(hubColor[1], hubColor[2], hubColor[3], 0.75)
+		DrawImage(self.ring, centerX - hubRadius, centerY - hubRadius, hubRadius * 2, hubRadius * 2)
+	end
+	-- The ring may be outside a panned or zoomed viewport. Keep the Hub state readable either way.
+	local hubLabelX = m_min(m_max(centerX + m_min(hubRadius + 5, 28), left + 8), right - 138)
+	local hubLabelY = m_min(m_max(centerY - 7, top + instructionHeight + 3), bottom - 17)
+	SetDrawColor(0.02, 0.025, 0.035, 0.92)
+	DrawImage(nil, hubLabelX - 4, hubLabelY - 3, 130, 20)
+	SetDrawColor(1, 1, 1)
+	DrawString(hubLabelX, hubLabelY, "LEFT", 14, "VAR", hubColor[5] .. "HUB  " .. hubColor[6])
+
+	SetDrawColor(1, 1, 1)
+end
+
+function PassiveTreeViewClass:ApplyOptimizerZoneClick(build, treeClick, treeX, treeY, shiftDown)
+	if not self.zoneEditMode then return false end
+	local region = SpatialZones.Classify(treeX, treeY, self.zoneMetadata)
+	if region and build.treeTab then
+		local action = treeClick == "RIGHT" and "forbid" or (shiftDown and "require" or "allow")
+		build.treeTab:OnOptimizerZoneClick(region, action)
+	end
+	-- Returning true means the normal node allocator must not see this click,
+	-- including clicks that land outside a classified active region.
+	return true, region
+end
+
+function PassiveTreeViewClass:CaptureRoutePlannerTarget(build, node)
+	local optimizerTab = build and build.optimizerTab
+	if not optimizerTab or optimizerTab.routePlannerTargetSelectMode ~= true then return false, false end
+	if type(node) ~= "table" then
+		optimizerTab.statusMessage = "Clique diretamente em um nó passivo para fixá-lo como destino da rota."
+		return true, false
+	end
+	local spec = build.spec
+	local nodeId = tonumber(node.id)
+	local specNode = nodeId and spec and spec.nodes
+		and (spec.nodes[nodeId] or spec.nodes[tostring(nodeId)]) or nil
+	local treeNode = nodeId and spec and spec.tree and spec.tree.nodes
+		and (spec.tree.nodes[nodeId] or spec.tree.nodes[tostring(nodeId)]) or nil
+	if not nodeId or nodeId < 1 or nodeId ~= math.floor(nodeId) or specNode ~= node or not treeNode
+		or node.alloc or node.ascendancyName or node.isProxy or node.isMultipleChoiceOption or node.isTattoo
+		or (node.type ~= "Normal" and node.type ~= "Notable" and node.type ~= "Keystone") then
+		optimizerTab.statusMessage = "Esse nó não aceita roteamento direto. Escolha um nó normal, notável ou keystone ainda não alocado da árvore principal."
+		return true, false
+	end
+	optimizerTab.textValues.routePlannerTargetNodeId = tostring(nodeId)
+	optimizerTab.textValues.routePlannerTargetNodeName = tostring(node.dn or node.name or "")
+	optimizerTab.textValues.routePlannerTargetTreeVersion = tostring(spec.treeVersion or "")
+	optimizerTab.routePlannerTargetSelectMode = false
+	optimizerTab.modFlag = true
+	optimizerTab.statusMessage = "Nó-alvo salvo: " .. tostring(node.dn or node.name or "Passive")
+		.. " (#" .. tostring(nodeId) .. "). Volte ao AI Planner para gerar caminhos até esse nó."
+	return true, true
+end
+
 ---@param build Build
 function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 	local spec = build.spec
 	local tree = spec.tree
+	local optimizerTab = build.optimizerTab
 
 	local cursorX, cursorY = GetCursorPos()
 	local mOver = cursorX >= viewPort.x and cursorX < viewPort.x + viewPort.width and cursorY >= viewPort.y and cursorY < viewPort.y + viewPort.height
@@ -211,6 +332,10 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 					-- Dragging won't actually commence unless the cursor moves far enough
 					self.dragX, self.dragY = cursorX, cursorY
 				end
+			elseif (event.key == "ESCAPE" or event.key == "ESC") and optimizerTab
+				and optimizerTab.routePlannerTargetSelectMode == true then
+				optimizerTab.routePlannerTargetSelectMode = false
+				optimizerTab.statusMessage = "Seleção de nó-alvo cancelada. A build permanece inalterada."
 			elseif event.key == "p" then
 				self.showHeatMap = not self.showHeatMap
 			elseif event.key == "d" and IsKeyDown("CTRL") then
@@ -290,7 +415,17 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 				(y - offsetY) / scale
 	end
 
-	if IsKeyDown("SHIFT") then
+	-- Zone-edit clicks are consumed before the normal passive allocation handler.
+	-- The selected region uses the same versioned spatial classifier as TreeSearch.
+	if self.zoneEditMode and treeClick then
+		if mOver and self.zoneEditSpec == spec then
+			local treeX, treeY = screenToTree(cursorX, cursorY)
+			self:ApplyOptimizerZoneClick(build, treeClick, treeX, treeY, IsKeyDown("SHIFT"))
+		end
+		treeClick = nil
+	end
+
+	if not self.zoneEditMode and IsKeyDown("SHIFT") then
 		-- Enable path tracing mode
 		self.traceMode = true
 		self.tracePath = self.tracePath or { }
@@ -387,6 +522,10 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 
 	-- Split Personality highlight
 	local splitPersonalityPath = spec.splitPersonalityPath or { }
+	if treeClick == "LEFT" and optimizerTab and optimizerTab.routePlannerTargetSelectMode == true then
+		local handled = self:CaptureRoutePlannerTarget(build, hoverNode)
+		if handled then treeClick = nil end
+	end
 
 	if treeClick == "LEFT" then
 		if hoverNode then
@@ -739,6 +878,10 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 			left + c[11] * width, top + c[12] * height,
 			left + c[13] * width, top + c[14] * height,
 			left + c[15] * width, top + c[16] * height)
+	end
+
+	if self.zoneEditMode then
+		self:DrawOptimizerZones(build, viewPort, treeToScreen, scale)
 	end
 
 	-- Draw the connecting lines between nodes
@@ -1255,6 +1398,15 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 				end
 			end
 		end
+	end
+	if optimizerTab and optimizerTab.routePlannerTargetSelectMode == true then
+		SetDrawLayer(nil, 30)
+		SetDrawColor(0.02, 0.025, 0.035, 0.94)
+		DrawImage(nil, viewPort.x + 12, viewPort.y + 12, m_min(viewPort.width - 24, 640), 30)
+		SetDrawColor(1, 1, 1)
+		DrawString(viewPort.x + 20, viewPort.y + 19, "LEFT", 14, "VAR",
+			"^6AI Planner: clique em um nó normal, notável ou keystone ainda não alocado. Esc cancela.")
+		SetDrawColor(1, 1, 1)
 	end
 end
 function PassiveTreeViewClass:DrawImageRotated(handle, x, y, width, height, angle, ...)

@@ -5,6 +5,28 @@
 --
 local t_concat = table.concat
 
+local function inflateJewelData(compressedData)
+	if type(Inflate) == "function" then
+		local ok, jewelData = pcall(Inflate, compressedData)
+		if ok and type(jewelData) == "string" and #jewelData > 0 then
+			return jewelData
+		end
+	end
+
+	-- HeadlessWrapper's Inflate stub returns an empty string. Use the bounded
+	-- zlib path as a safe fallback instead of treating an empty cache as data.
+	local ok, boundedInflate = pcall(require, "Modules.Optimizer.BoundedInflate")
+	if ok and type(boundedInflate) == "table" and type(boundedInflate.inflate) == "function" then
+		local inflater = type(boundedInflate.inflateTrustedStaticData) == "function"
+			and boundedInflate.inflateTrustedStaticData or boundedInflate.inflate
+		local jewelData = inflater(compressedData)
+		if type(jewelData) == "string" and #jewelData > 0 then
+			return jewelData
+		end
+	end
+	return nil
+end
+
 local function loadJewelFile(jewelTypeName, cacheUncompressed)
 	local jewelPath = "/Data/TimelessJewelData/" .. jewelTypeName
 	local scriptPath = GetScriptPath()
@@ -47,7 +69,7 @@ local function loadJewelFile(jewelTypeName, cacheUncompressed)
 		if uncompressedFile then
 			local jewelData = uncompressedFile:read("*a")
 			uncompressedFile:close()
-			if jewelData then
+			if type(jewelData) == "string" and #jewelData > 0 then
 				return jewelData
 			end
 		end
@@ -81,7 +103,11 @@ local function loadJewelFile(jewelTypeName, cacheUncompressed)
 		return
 	end
 
-	local jewelData = Inflate(compressedData)
+	local jewelData = inflateJewelData(compressedData)
+	if type(jewelData) ~= "string" or #jewelData == 0 then
+		ConPrintf("Failed to inflate jewel data: " .. jewelTypeName)
+		return
+	end
 	if cacheUncompressed then
 		local uncompressedFile = io.open(scriptPath .. jewelPath .. ".bin", "wb+")
 		if uncompressedFile then

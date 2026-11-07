@@ -1060,8 +1060,13 @@ function PassiveSpecClass:AddMasteryEffectOptionsToNode(node)
 end
 function PassiveSpecClass:NodesInIntuitiveLeapLikeRadius(node)
 	local result = { }
-	if self.jewels[node.id] and self.jewels[node.id] > 0 then
-		local item = self.build.itemsTab.items[self.jewels[node.id]]
+	local itemId = self.jewels[node.id]
+	local item = itemId and itemId > 0 and self.build.itemsTab and self.build.itemsTab.items
+		and self.build.itemsTab.items[itemId]
+	-- Imported legacy trees can reference an item row that PoB could not parse.
+	-- Keep building the passive graph; the source XML and its item row are retained
+	-- separately by the build archive, and no radius effects are inferred here.
+	if item then
 		local radiusIndex = item.jewelRadiusIndex
 		if item and item.jewelData and item.jewelData.intuitiveLeapLike then
 			local inRadius = self.nodes[node.id].nodesInRadius and self.nodes[node.id].nodesInRadius[radiusIndex]
@@ -1072,10 +1077,12 @@ function PassiveSpecClass:NodesInIntuitiveLeapLikeRadius(node)
 			end
 		end
 
-		if item.jewelData and item.jewelData.impossibleEscapeKeystone then
+		if item.jewelData and item.jewelData.impossibleEscapeKeystone
+			and type(item.jewelData.impossibleEscapeKeystones) == "table" then
 			for keyName, keyNode in pairs(item.jewelData.impossibleEscapeKeystones) do
 				if self.tree.keystoneMap[keyName] and self.tree.keystoneMap[keyName].nodesInRadius then
-					for affectedNodeId in pairs(self.tree.keystoneMap[keyName].nodesInRadius[radiusIndex]) do
+					local inRadius = self.tree.keystoneMap[keyName].nodesInRadius[radiusIndex]
+					for affectedNodeId in pairs(inRadius or {}) do
 						if self.nodes[affectedNodeId].alloc then
 							t_insert(result, self.nodes[affectedNodeId])
 						end
@@ -1552,19 +1559,16 @@ function PassiveSpecClass:BuildAllDependsAndPaths()
 				local prune = true
 				for nodeId, itemId in pairs(self.jewels) do
 					if self.allocNodes[nodeId] then
-						if itemId ~= 0 and (
-							 self.build.itemsTab.items[itemId] and (
-								self.build.itemsTab.items[itemId].jewelData
-									and self.build.itemsTab.items[itemId].jewelData.intuitiveLeapLike
-									and self.build.itemsTab.items[itemId].jewelRadiusIndex
-									and self.nodes[nodeId].nodesInRadius
-									and self.nodes[nodeId].nodesInRadius[self.build.itemsTab.items[itemId].jewelRadiusIndex][depNode.id]
-							) or (
-								self.build.itemsTab.items[itemId].jewelData
-									and self.build.itemsTab.items[itemId].jewelData.impossibleEscapeKeystones
-									and self:NodeInKeystoneRadius(self.build.itemsTab.items[itemId].jewelData.impossibleEscapeKeystones, depNode.id, self.build.itemsTab.items[itemId].jewelRadiusIndex)
-							)
-						) then
+						local item = itemId ~= 0 and self.build.itemsTab and self.build.itemsTab.items
+							and self.build.itemsTab.items[itemId]
+						local jewelData = item and item.jewelData
+						local radiusIndex = item and item.jewelRadiusIndex
+						local socket = self.nodes[nodeId]
+						local intuitiveRadius = jewelData and jewelData.intuitiveLeapLike and radiusIndex
+							and socket and socket.nodesInRadius and socket.nodesInRadius[radiusIndex]
+						local impossibleEscapeRadius = jewelData and jewelData.impossibleEscapeKeystones
+							and radiusIndex and self:NodeInKeystoneRadius(jewelData.impossibleEscapeKeystones, depNode.id, radiusIndex)
+						if (intuitiveRadius and intuitiveRadius[depNode.id]) or impossibleEscapeRadius then
 							-- Hold off on the pruning; this node could be supported by Intuitive Leap-like jewel
 							prune = false
 							if not intuitiveLeaps[nodeId] then
@@ -2374,7 +2378,7 @@ function PassiveSpecClass:CreateUndoState()
 	return {
 		classId = self.curClassId,
 		ascendClassId = self.curAscendClassId,
-		secondaryAscendClassId = self.secondaryAscendClassId,
+		secondaryAscendClassId = self.curSecondaryAscendClassId,
 		hashList = allocNodeIdList,
 		hashOverrides = hashOverridesCopy,
 		masteryEffects = selections,

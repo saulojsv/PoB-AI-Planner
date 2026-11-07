@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="192" viewBox="0 0 512 192">
+  <g fill="none" stroke="#d8b777" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M78 12 132 43v62l-54 31-54-31V43z" stroke-width="5"/>
+    <path d="M78 30v27m0 0L52 73m26-16 27 16M52 73v28m53-28v28M52 101l26 15 27-15" stroke-width="4"/>
+    <circle cx="78" cy="57" r="7" fill="#d8b777"/><circle cx="52" cy="73" r="6" fill="#d8b777"/>
+    <circle cx="105" cy="73" r="6" fill="#d8b777"/><circle cx="52" cy="101" r="6" fill="#d8b777"/>
+    <circle cx="105" cy="101" r="6" fill="#d8b777"/><circle cx="78" cy="116" r="7" fill="#d8b777"/>
+  </g>
+  <text x="158" y="77" fill="#d8b777" font-family="Georgia, serif" font-size="34" letter-spacing="4">PATH OF BUILDING</text>
+  <text x="161" y="119" fill="#d8b777" font-family="Segoe UI, sans-serif" font-size="20" letter-spacing="7">AI PLANNER</text>
+</svg>

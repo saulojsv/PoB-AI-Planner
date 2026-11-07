@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pob-ai-planner-gnn"
+version = "0.1.0"
+description = "Optional local PyTorch Geometric ranker for native PoB optimizer proposals"
+requires-python = ">=3.10,<3.13"
+dependencies = []
+
+[project.optional-dependencies]
+runtime = ["torch==2.6.0", "torch-geometric==2.6.1"]
+
+[tool.setuptools.packages.find]
+where = ["../../.."]
+include = ["tools.optimizer.gnn*"]

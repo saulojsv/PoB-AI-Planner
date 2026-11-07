@@ -1,0 +1,326 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pob-ai.local/schemas/public_build_observation.v2.json",
+  "title": "Public build discovery lead; observation-only",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schemaVersion",
+    "round",
+    "searchDateUtc",
+    "searchSources",
+    "collectionPolicy",
+    "target",
+    "observations",
+    "excludedFromNewLeads",
+    "limitations",
+    "governance"
+  ],
+  "properties": {
+    "schema": {
+      "const": "pob-ai-planner-public-build-observation"
+    },
+    "schemaVersion": {
+      "const": 2
+    },
+    "round": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "searchDateUtc": {
+      "type": "string",
+      "format": "date"
+    },
+    "searchSources": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/sourceDomain"
+      }
+    },
+    "collectionPolicy": {
+      "$ref": "#/$defs/safeText"
+    },
+    "target": {
+      "$ref": "#/$defs/target"
+    },
+    "observations": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "$ref": "#/$defs/observation"
+      }
+    },
+    "excludedFromNewLeads": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sourceDomain",
+          "title",
+          "reason"
+        ],
+        "properties": {
+          "sourceDomain": {
+            "$ref": "#/$defs/sourceDomain"
+          },
+          "title": {
+            "$ref": "#/$defs/safeText"
+          },
+          "reason": {
+            "$ref": "#/$defs/safeText"
+          }
+        }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "$ref": "#/$defs/safeText"
+      }
+    },
+    "governance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rightsStatus",
+        "allObservationsOnly",
+        "queueEligible",
+        "independentLineageEligible",
+        "xmlDownloaded",
+        "importsRetained",
+        "publicMetricsRetained",
+        "labelsCreated",
+        "coverageUpdated",
+        "trainingDataCreated",
+        "r162Modified"
+      ],
+      "properties": {
+        "rightsStatus": {
+          "const": "unverified"
+        },
+        "allObservationsOnly": {
+          "const": true
+        },
+        "queueEligible": {
+          "const": false
+        },
+        "independentLineageEligible": {
+          "const": false
+        },
+        "xmlDownloaded": {
+          "const": false
+        },
+        "importsRetained": {
+          "const": false
+        },
+        "publicMetricsRetained": {
+          "const": false
+        },
+        "labelsCreated": {
+          "const": false
+        },
+        "coverageUpdated": {
+          "const": false
+        },
+        "trainingDataCreated": {
+          "const": false
+        },
+        "r162Modified": {
+          "const": false
+        }
+      }
+    }
+  },
+  "$defs": {
+    "safeText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1200,
+      "pattern": "^(?!.*(?:https?://|www\\.))[\\s\\S]*$"
+    },
+    "sourceDomain": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 253,
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$",
+      "description": "Lowercase normalized DNS hostname only; no URL scheme, path, query, or fragment."
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "game",
+        "patch",
+        "treeVersion",
+        "category",
+        "name",
+        "variantId",
+        "effectId",
+        "gameId",
+        "gemId",
+        "remainingAtFrozenR162"
+      ],
+      "properties": {
+        "game": {
+          "const": "Path of Exile 1"
+        },
+        "patch": {
+          "enum": [
+            "3.24",
+            "3.25",
+            "3.26",
+            "3.27",
+            "3.28",
+            "3.29"
+          ]
+        },
+        "treeVersion": {
+          "pattern": "^3_(24|25|26|27|28|29)$"
+        },
+        "category": {
+          "enum": [
+            "normal",
+            "transfigured"
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/safeText"
+        },
+        "variantId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "effectId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "gameId": {
+          "type": "string",
+          "pattern": "^Metadata/Items/Gems/[A-Za-z0-9_/-]{1,160}$"
+        },
+        "gemId": {
+          "type": "string",
+          "pattern": "^Metadata/Items/Gems/[A-Za-z0-9_/-]{1,160}$"
+        },
+        "remainingAtFrozenR162": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observationId",
+        "sourceDomain",
+        "discoveryReferences",
+        "creatorLabel",
+        "title",
+        "claimedLeague",
+        "claimedPatch",
+        "claimedMainSkill",
+        "claimedVariant",
+        "claimedAscendancy",
+        "claimedScenario",
+        "rightsStatus",
+        "observationOnly",
+        "scopeDisposition",
+        "lineageDisposition",
+        "queueEligible",
+        "independentLineageEligible",
+        "acquisitionMethod",
+        "discoveryNote"
+      ],
+      "properties": {
+        "observationId": {
+          "type": "string",
+          "pattern": "^R[0-9]{3,4}-OBS-[0-9]{3}$"
+        },
+        "sourceDomain": {
+          "$ref": "#/$defs/sourceDomain"
+        },
+        "discoveryReferences": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": {
+            "$ref": "#/$defs/safeText"
+          }
+        },
+        "creatorLabel": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/safeText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "$ref": "#/$defs/safeText"
+        },
+        "claimedLeague": {
+          "$ref": "#/$defs/safeText"
+        },
+        "claimedPatch": {
+          "$ref": "#/$defs/safeText"
+        },
+        "claimedMainSkill": {
+          "$ref": "#/$defs/safeText"
+        },
+        "claimedVariant": {
+          "$ref": "#/$defs/safeText"
+        },
+        "claimedAscendancy": {
+          "$ref": "#/$defs/safeText"
+        },
+        "claimedScenario": {
+          "$ref": "#/$defs/safeText"
+        },
+        "rightsStatus": {
+          "const": "unverified"
+        },
+        "observationOnly": {
+          "const": true
+        },
+        "scopeDisposition": {
+          "enum": [
+            "candidate_unverified",
+            "ambiguous_main_skill",
+            "ambiguous_variant",
+            "out_of_scope",
+            "grouped_author_projects",
+            "index_only"
+          ]
+        },
+        "lineageDisposition": {
+          "$ref": "#/$defs/safeText"
+        },
+        "queueEligible": {
+          "const": false
+        },
+        "independentLineageEligible": {
+          "const": false
+        },
+        "acquisitionMethod": {
+          "$ref": "#/$defs/safeText"
+        },
+        "discoveryNote": {
+          "$ref": "#/$defs/safeText"
+        }
+      }
+    }
+  }
+}

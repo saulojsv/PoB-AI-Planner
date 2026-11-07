@@ -18,6 +18,7 @@ local s_format = string.format
 local s_gsub = string.gsub
 local s_byte = string.byte
 local dkjson = require "dkjson"
+local SpatialZones = require("Modules.Optimizer.SpatialZones")
 
 ---@class TreeTab: ControlHost
 local TreeTabClass = newClass("TreeTab", "ControlHost")
@@ -273,6 +274,19 @@ function TreeTabClass:TreeTab(build)
 		function() return self.controls.powerReportList.shown and "Hide Power Report" or "Show Power Report" end, function()
 		self.controls.powerReportList.shown = not self.controls.powerReportList.shown
 	end)
+	self.controls.zoneEditButton = new("ButtonControl"):ButtonControl({ "LEFT", self.controls.powerReport, "RIGHT" }, { 8, 0, 132, 20 },
+		function() return self.viewer.zoneEditMode and "Finish zone edit" or "Edit AI zones" end, function()
+		if self.viewer.zoneEditMode then
+			self:StopOptimizerZoneEdit()
+		else
+			self:StartOptimizerZoneEdit()
+		end
+	end)
+	self.controls.zoneEditButton.tooltipText = "Draw and edit the AI Planner's spatial branch mask on the native tree. Left click allows a zone, Shift+left requires it, and right click forbids it. This mode never allocates or removes passives."
+	self.controls.zoneEditButton.enabled = function()
+		local job = self.build.optimizerTab and self.build.optimizerTab.job
+		return self.viewer.zoneEditMode or not (job and job.status == "running")
+	end
 
 	-- Power Report List
 	local yPos = self.controls.treeHeatMap.y == 0 and self.controls.specSelect.height + 4 or self.controls.specSelect.height * 2 + 8
@@ -356,6 +370,54 @@ function TreeTabClass:RemoveTattooFromNode(node)
 	self.build.spec:BuildAllDependsAndPaths()
 end
 
+function TreeTabClass:StartOptimizerZoneEdit()
+	local optimizerTab = self.build.optimizerTab
+	if not optimizerTab then
+		self.viewer.zoneEditNotice = "AI Planner is unavailable for this build."
+		return false, self.viewer.zoneEditNotice
+	end
+	local canEdit, editError = optimizerTab:CanEditSpatialZones()
+	if not canEdit then
+		self.viewer.zoneEditNotice = editError
+		if ToastNotification then ToastNotification:Add(editError) end
+		return false, editError
+	end
+	local regionByNode, metadata, partitionError = SpatialZones.Build(self.build.spec)
+	if not regionByNode then
+		self.viewer.zoneEditNotice = partitionError or "PoB could not partition the active passive tree."
+		if ToastNotification then ToastNotification:Add(self.viewer.zoneEditNotice) end
+		return false, self.viewer.zoneEditNotice
+	end
+	self.viewer.zoneEditMode = true
+	self.viewer.zoneEditSpec = self.build.spec
+	self.viewer.zoneRegionByNode = regionByNode
+	self.viewer.zoneMetadata = metadata
+	self.viewer.zoneEditNotice = nil
+	return true
+end
+
+function TreeTabClass:StopOptimizerZoneEdit()
+	self.viewer.zoneEditMode = false
+	self.viewer.zoneEditSpec = nil
+	self.viewer.zoneRegionByNode = nil
+	self.viewer.zoneMetadata = nil
+	self.viewer.zoneEditNotice = nil
+	return true
+end
+
+function TreeTabClass:OnOptimizerZoneClick(region, action)
+	if not self.viewer.zoneEditMode or self.viewer.zoneEditSpec ~= self.build.spec then return false end
+	local optimizerTab = self.build.optimizerTab
+	if not optimizerTab then return false, "AI Planner is unavailable for this build" end
+	local changed, changeError = optimizerTab:ToggleSpatialRegion(region, action)
+	if not changed then
+		self.viewer.zoneEditNotice = changeError or "The AI Planner Matrix rejected this zone change."
+		return false, self.viewer.zoneEditNotice
+	end
+	self.viewer.zoneEditNotice = nil
+	return true
+end
+
 function TreeTabClass:Draw(viewPort, inputEvents)
 	self.anchorControls.x = viewPort.x + 4
 	self.anchorControls.y = viewPort.y + viewPort.height - 24
@@ -408,9 +470,10 @@ function TreeTabClass:Draw(viewPort, inputEvents)
 									+ (self.isCustomMaxDepth and (self.controls.nodePowerMaxDepthCustom.width + self.controls.nodePowerMaxDepthCustom.x) or 0)
 									+ (self.viewer.showHeatMap and (self.controls.treeHeatMapStatSelect.width + self.controls.treeHeatMapStatSelect.x 
 																	+ self.controls.powerReport.width + self.controls.powerReport.x) or 0)
+	local widthSecondLineWithZoneButton = widthSecondLineControls + self.controls.zoneEditButton.width + self.controls.zoneEditButton.x
 	
 	-- Check first line
-	if viewPort.width >= widthFirstLineControls + widthSecondLineControls + rightMargin then
+	if viewPort.width >= widthFirstLineControls + widthSecondLineWithZoneButton + rightMargin then
 		linesHeight = 0
 		self.controls.treeSearch:SetAnchor("LEFT", self.controls.versionSelect, "RIGHT", 8, 0)
 		self.controls.powerReportList:SetAnchor("TOPLEFT", self.controls.specSelect, "BOTTOMLEFT", 0, self.controls.specSelect.height + 6)
@@ -420,12 +483,21 @@ function TreeTabClass:Draw(viewPort, inputEvents)
 	end
 
 	-- Check second line
-	if viewPort.width >= widthSecondLineControls + rightMargin then
+	if viewPort.width >= widthSecondLineWithZoneButton + rightMargin then
 		self.controls.treeHeatMap:SetAnchor("LEFT", self.controls.findTimelessJewel, "RIGHT", 130, 0)
+		local lastSecondLineControl = self.controls.nodePowerMaxDepthSelect
+		if self.isCustomMaxDepth then lastSecondLineControl = self.controls.nodePowerMaxDepthCustom end
+		if self.viewer.showHeatMap then lastSecondLineControl = self.controls.powerReport end
+		self.controls.zoneEditButton:SetAnchor("LEFT", lastSecondLineControl, "RIGHT", 8, 0)
+	elseif viewPort.width >= widthSecondLineControls + rightMargin then
+		linesHeight = linesHeight + 24
+		self.controls.treeHeatMap:SetAnchor("LEFT", self.controls.findTimelessJewel, "RIGHT", 130, 0)
+		self.controls.zoneEditButton:SetAnchor("TOPLEFT", self.controls.treeHeatMap, "BOTTOMLEFT", -124, 4)
 	else
-		linesHeight = linesHeight * 2
+		linesHeight = linesHeight * 2 + 24
 		self.controls.treeHeatMap:SetAnchor("TOPLEFT", self.controls.treeSearch, "BOTTOMLEFT", 124, 4)
 		self.controls.powerReportList:SetAnchor("TOPLEFT", self.controls.treeHeatMap, "BOTTOMLEFT", -124, self.controls.treeHeatMap.height + 6)
+		self.controls.zoneEditButton:SetAnchor("TOPLEFT", self.controls.treeHeatMap, "BOTTOMLEFT", -124, 4)
 	end
 
 	-- determine positions for convert line of controls
@@ -449,6 +521,10 @@ function TreeTabClass:Draw(viewPort, inputEvents)
 		self.jumpToNode = false
 	end
 	self.viewer.compareSpec = self.isComparing and self.specList[self.activeCompareSpec] or nil
+	if self.viewer.zoneEditMode and self.viewer.zoneEditSpec ~= self.build.spec then
+		self:StopOptimizerZoneEdit()
+		self.viewer.zoneEditNotice = "Zone editor closed because the active passive tree changed."
+	end
 	self.viewer:Draw(self.build, treeViewPort, inputEvents)
 
 	local newSpecList = self:GetSpecList()

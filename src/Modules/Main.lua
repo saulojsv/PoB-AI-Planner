@@ -23,6 +23,8 @@ require("Modules.ItemTools")
 require("Modules.CalcTools")
 LoadModule("Modules/PantheonTools")
 LoadModule("Modules/BuildSiteTools")
+local OptimizerMCP = LoadModule("Modules/Optimizer/MCPBridge")
+local OptimizerAIChat = LoadModule("Modules/Optimizer/AIChat")
 
 -- Load as global so other modules can access the same instance
 ToastNotification = LoadModule("Modules/ToastNotification")
@@ -56,6 +58,12 @@ local tempTable2 = { }
 ---@field allowTreeDownload? boolean
 main = new("ControlHost"):ControlHost()
 
+-- LaunchSubScript routes the registered SSE callback names back onto this UI
+-- thread. Only the active AI chat request ID and text deltas cross that seam.
+function AIPlannerStreamEvent(requestId, kind, value)
+	if main and main.optimizerAI then main.optimizerAI:OnStreamEvent(requestId, kind, value) end
+end
+
 function main:Init()
 	self:DetectUnicodeSupport()
 	self.modes = { }
@@ -74,9 +82,14 @@ function main:Init()
 			if not isSuccess then
 				self:SetMode("BUILD", false, data)
 			else
-				local xmlText = Inflate(common.base64.decode(data:gsub("-","+"):gsub("_","/")))
-				self:SetMode("BUILD", false, "Imported Build", xmlText, false, importLink)
-				self.newModeChangeToTree = true
+				local lifecycle = require("Modules.Optimizer.ImportLifecycle")
+				local xmlText, coverageOrReason = lifecycle.DecodeBuildCode(data)
+				if not xmlText then
+					self:SetMode("BUILD", false, lifecycle.FailureMessage(coverageOrReason))
+				else
+					self:SetMode("BUILD", false, "Imported Build", xmlText, false, importLink)
+					self.newModeChangeToTree = true
+				end
 			end
 		end)
 		arg[1] = nil -- Protect against downloading again this session.
@@ -302,6 +315,14 @@ the "Releases" section of the GitHub page.]])
 			end
 		end
 	end
+
+	-- The headless wrapper only runs one frame after initialization, so it cannot
+	-- poll this bridge. Keep the shared endpoint owned by the live desktop app.
+	if not _G.__POB_HEADLESS_MODE then
+		self.optimizerMCP = OptimizerMCP
+		self.optimizerMCP:Start()
+		self.optimizerAI = new("OptimizerAIChat"):OptimizerAIChat()
+	end
 end
 
 function main:DetectUnicodeSupport()
@@ -372,6 +393,8 @@ function main:CanExit()
 end
 
 function main:Shutdown()
+	if self.optimizerAI then self.optimizerAI:Shutdown() end
+	if self.optimizerMCP then self.optimizerMCP:Stop() end
 	self:CallMode("Shutdown")
 	self:SaveSettings()
 end
@@ -397,6 +420,11 @@ function main:OnFrame()
 		self.newModeChangeToTree = false
 	end
 
+	-- Service local MCP requests as soon as the active mode is initialized.
+	-- Doing this before mode rendering avoids making bridge latency depend on
+	-- tree drawing, controls, or tab-specific frame work.
+	if self.optimizerMCP then self.optimizerMCP:Poll() end
+
 	self.viewPort = { x = 0, y = 0, width = self.screenW, height = self.screenH }
 
 	if self.popups[1] then
@@ -407,6 +435,7 @@ function main:OnFrame()
 	end
 
 	self:CallMode("OnFrame", self.inputEvents, self.viewPort)
+	if self.optimizerAI then self.optimizerAI:Tick() end
 
 	if launch.updateErrMsg then
 		ToastNotification:Add(string.format("Update check failed!\n%s", launch.updateErrMsg))
@@ -490,6 +519,7 @@ function main:OnFrame()
 	for _, onFrameFunc in pairs(self.onFrameFuncs) do
 		onFrameFunc()
 	end
+	if self.optimizerMCP then self.optimizerMCP:FrameComplete() end
 end
 
 function main:OnKeyDown(key, doubleClick)
@@ -1663,8 +1693,21 @@ function main:OpenPopup(width, height, title, controls, enterControl, defaultCon
 	return popup
 end
 
-function main:ClosePopup()
-	t_remove(self.popups, 1)
+function main:ClosePopup(popup)
+	if popup then
+		for index, openPopup in ipairs(self.popups) do
+			if openPopup == popup then
+				t_remove(self.popups, index)
+				return true
+			end
+		end
+		return false
+	end
+	if self.popups[1] then
+		t_remove(self.popups, 1)
+		return true
+	end
+	return false
 end
 
 function main:OpenMessagePopup(title, msg)

@@ -1,0 +1,65 @@
+name: PoB upstream compatibility
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  upstream-merge:
+    name: Merge and test PoB ${{ matrix.upstream_branch }}
+    runs-on: ubuntu-latest
+    container: ghcr.io/pathofbuildingcommunity/pathofbuilding-tests:latest
+    strategy:
+      fail-fast: false
+      matrix:
+        upstream_branch: [master, dev]
+    steps:
+      - name: Check out Planner source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure checkout permissions
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Fetch official PoB branch
+        env:
+          UPSTREAM_BRANCH: ${{ matrix.upstream_branch }}
+        run: |
+          git remote add pob-upstream https://github.com/PathOfBuildingCommunity/PathOfBuilding.git
+          git fetch --no-tags pob-upstream "refs/heads/${UPSTREAM_BRANCH}:refs/remotes/pob-upstream/${UPSTREAM_BRANCH}"
+
+      - name: Report overlapping Planner and upstream files
+        env:
+          UPSTREAM_BRANCH: ${{ matrix.upstream_branch }}
+        run: |
+          set -eu
+          upstream_ref="refs/remotes/pob-upstream/${UPSTREAM_BRANCH}"
+          merge_base="$(git merge-base HEAD "$upstream_ref")"
+          printf 'Upstream commit: '
+          git rev-parse --short "$upstream_ref"
+          printf 'Shared base: %s\n' "$merge_base"
+          printf 'Files changed upstream since the shared base:\n'
+          git diff --name-only "$merge_base" "$upstream_ref" | sort -u
+          printf 'Overlapping files (reviewed by the merge and tests below):\n'
+          comm -12 \
+            <(git diff --name-only "$merge_base" HEAD | sort -u) \
+            <(git diff --name-only "$merge_base" "$upstream_ref" | sort -u) || true
+
+      - name: Merge upstream in this disposable runner
+        env:
+          UPSTREAM_BRANCH: ${{ matrix.upstream_branch }}
+        run: |
+          set -eu
+          git merge --no-edit --no-ff --no-commit "refs/remotes/pob-upstream/${UPSTREAM_BRANCH}"
+
+      - name: Run PoB LuaJIT tests on merged source
+        run: busted --lua=luajit

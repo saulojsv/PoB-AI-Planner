@@ -10,6 +10,7 @@ inspect.lua
 
 # Application files
 Builds/
+OptimizerStudies/
 *.cfg
 Settings.xml
 
@@ -45,3 +46,22 @@ runtime/SimpleGraphic/Screenshots
 
 .emmyrc.json
 .luarc.json
+
+# Python tooling caches
+__pycache__/
+*.py[cod]
+
+# PoB AI Planner local datasets, project records, backups, and release builds
+.project-planner/
+runtime/AIPlanner-*/
+runtime/PoB-AIPlanner-*/
+TestOptimizerMCPBridge_spec.lua/
+*.before-*
+*.bak
+*.pt
+*.ckpt
+ISSUES_CURRENT_MIRROR_*.md
+PLANNER_CURRENT_MIRROR_*.md
+docs/optimizer/attack-target-coverage*.csv
+docs/optimizer/attack-target-coverage*.json
+docs/optimizer/attack-target-observation-map*.csv

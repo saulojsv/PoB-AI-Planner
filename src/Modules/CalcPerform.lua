@@ -1368,7 +1368,7 @@ function calcs.perform(env, skipEHP)
 			enemyDB.multipliers["BrandsAttached"] = m_max(attached, enemyDB.multipliers["BrandsAttached"] or 0)
 		end
 		if activeSkill.skillFlags.totem then
-			local limit = env.player.mainSkill.skillModList:Sum("BASE", env.player.mainSkill.skillCfg, "ActiveTotemLimit", "ActiveBallistaLimit" )
+			local limit = calcs.getActiveTotemLimit(env.player.mainSkill)
 			output.ActiveTotemLimit = m_max(limit, output.ActiveTotemLimit or 0)
 			output.TotemsSummoned = modDB:Override(nil, "TotemsSummoned") or output.ActiveTotemLimit
 			enemyDB.multipliers["TotemsSummoned"] = m_max(output.TotemsSummoned or 0, enemyDB.multipliers["TotemsSummoned"] or 0)
@@ -2097,6 +2097,17 @@ function calcs.perform(env, skipEHP)
 
 		-- Process attribute requirements
 	do
+		-- Use the same active item/gem records as the attribute requirement pass.
+		-- Gem levels added by equipment do not raise the socketed gem's own use
+		-- requirement; SkillsTab has already resolved its native reqLevel.
+		output.ReqLevel = 0
+		output.ReqLevelSource = nil
+		for _, reqSource in ipairs(env.requirementsTable) do
+			if (reqSource.Level or 0) > output.ReqLevel then
+				output.ReqLevel = reqSource.Level
+				output.ReqLevelSource = reqSource
+			end
+		end
 		local reqMult = calcLib.mod(modDB, nil, "GlobalAttributeRequirements")
 		local omniRequirements = modDB:Flag(nil, "OmniscienceRequirements") and calcLib.mod(modDB, nil, "OmniAttributeRequirements")
 		local ignoreAttrReq = modDB:Flag(nil, "IgnoreAttributeRequirements")
@@ -2194,6 +2205,8 @@ function calcs.perform(env, skipEHP)
 	local buffs = { }
 	env.buffs = buffs
 	local guards = { }
+	local disableGuardBuffs = env.override and env.override.disableGuardBuffs == true or false
+	local suppressedGuardBuffs = 0
 	local minionBuffs = { }
 	env.minionBuffs = minionBuffs
 	local debuffs = { }
@@ -2348,7 +2361,9 @@ function calcs.perform(env, skipEHP)
 					end
 				end
 			elseif buff.type == "Guard" then
-				if env.mode_buffs and (not activeSkill.skillFlags.totem or buff.allowTotemBuff) then
+				if disableGuardBuffs then
+					suppressedGuardBuffs = suppressedGuardBuffs + 1
+				elseif env.mode_buffs and (not activeSkill.skillFlags.totem or buff.allowTotemBuff) then
 					local skillCfg = buff.activeSkillBuff and skillCfg
 					local modStore = buff.activeSkillBuff and skillModList or modDB
 				 	if not buff.applyNotPlayer then
@@ -3339,6 +3354,8 @@ function calcs.perform(env, skipEHP)
 		mergeBuff(guard.modList, buffs, guard.name)
 	end
 	output.GuardSkillActive = modDB.conditions["AffectedByGuardSkill"] or false
+	output.OptimizerGuardBuffsDisabled = disableGuardBuffs
+	output.OptimizerSuppressedGuardBuffs = suppressedGuardBuffs
 
 	-- Apply buff/debuff modifiers
 	for _, modList in pairs(buffs) do

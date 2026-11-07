@@ -8,6 +8,7 @@ local ipairs = ipairs
 local s_format = string.format
 local t_insert = table.insert
 local m_max = math.max
+local ImportLifecycle = require("Modules.Optimizer.ImportLifecycle")
 
 ---@class PartyTab: ControlHost, Control
 local PartyTabClass = newClass("PartyTab", "ControlHost", "Control")
@@ -147,8 +148,9 @@ function PartyTabClass:PartyTab(build)
 			end
 		end
 
-		local xmlText = Inflate(common.base64.decode(buf:gsub("-","+"):gsub("_","/")))
+		local xmlText, decodeReason = ImportLifecycle.DecodeBuildCode(buf)
 		if not xmlText then
+			self.importCodeDetail = colorCodes.NEGATIVE..ImportLifecycle.FailureMessage(decodeReason)
 			return
 		end
 		if launch.devMode and IsKeyDown("SHIFT") then

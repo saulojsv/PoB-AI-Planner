@@ -15,6 +15,7 @@ local calcsHelpers = require("Classes.CompareCalcsHelpers")
 local buildListHelpers = require("Modules.BuildListHelpers")
 local itemSlotHelper = require("Modules.ItemSlotHelper")
 local configVisibility = require("Modules.ConfigVisibility")
+local ImportLifecycle = require("Modules.Optimizer.ImportLifecycle")
 
 -- Node IDs below this value are normal passive tree nodes; IDs at or above are cluster jewel nodes
 local CLUSTER_NODE_OFFSET = 65536
@@ -1259,7 +1260,7 @@ end
 
 -- Import a comparison build from a build code (base64-encoded)
 function CompareTabClass:ImportFromCode(code)
-	local xmlText = Inflate(common.base64.decode(code:gsub("-","+"):gsub("_","/")))
+	local xmlText = ImportLifecycle.DecodeBuildCode(code)
 	if not xmlText then
 		return false
 	end
@@ -1495,12 +1496,12 @@ function CompareTabClass:OpenImportPopup()
 				stateText = colorCodes.WARNING .. "Downloading..."
 				buildSites.DownloadBuild(buf, site, function(isSuccess, codeData)
 					if isSuccess then
-						local xmlText = Inflate(common.base64.decode(codeData:gsub("-","+"):gsub("_","/")))
+						local xmlText, decodeReason = ImportLifecycle.DecodeBuildCode(codeData)
 						if xmlText then
 							self:ImportBuild(xmlText, customName or ("Imported from " .. site.label))
 							main:ClosePopup()
 						else
-							stateText = colorCodes.NEGATIVE .. "Failed to decode build data"
+							stateText = colorCodes.NEGATIVE .. ImportLifecycle.FailureMessage(decodeReason)
 						end
 					else
 						stateText = colorCodes.NEGATIVE .. tostring(codeData)
@@ -1511,12 +1512,12 @@ function CompareTabClass:OpenImportPopup()
 		end
 
 		-- Try as a build code
-		local xmlText = Inflate(common.base64.decode(buf:gsub("-","+"):gsub("_","/")))
+		local xmlText, decodeReason = ImportLifecycle.DecodeBuildCode(buf)
 		if xmlText then
 			self:ImportBuild(xmlText, customName or "Imported build")
 			main:ClosePopup()
 		else
-			stateText = colorCodes.NEGATIVE .. "Invalid build code"
+			stateText = colorCodes.NEGATIVE .. ImportLifecycle.FailureMessage(decodeReason)
 		end
 	end)
 	controls.importFolder = new("ButtonControl"):ButtonControl(nil, {0, 130, 140, 20}, "Import from Folder", function()

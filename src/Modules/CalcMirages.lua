@@ -365,11 +365,24 @@ function calcs.mirages(env)
 
 		-- Find the active General's Cry gem to get active properties
 		for _, skill in ipairs(env.player.activeSkillList) do
-			if skill.activeEffect.grantedEffect.name == "General's Cry" and skill.socketGroup.slot == env.player.mainSkill.socketGroup.slot then
+			if skill.activeEffect and skill.activeEffect.grantedEffect
+				and skill.activeEffect.grantedEffect.name == "General's Cry"
+				and skill.socketGroup.slot == env.player.mainSkill.socketGroup.slot
+				and not (skill.skillFlags and skill.skillFlags.disable) then
 				cooldown = calcSkillCooldown(skill.skillModList, skill.skillCfg, skill.skillData)
 				generalsCryActiveSkill = skill
 				break
 			end
+		end
+		if not generalsCryActiveSkill then
+			-- A linked General's Cry support does not make its trigger usable when
+			-- the corresponding active warcry is disabled or absent. Fail closed:
+			-- CalcPerform will route the disabled Main Skill through calc.offence,
+			-- which emits zero CombinedDPS instead of evaluating phantom mirages.
+			env.player.mainSkill.disableReason = "No active General's Cry skill found"
+			env.player.mainSkill.skillFlags.disable = true
+			env.player.mainSkill.infoMessage2 = "General's Cry is disabled or unavailable"
+			return false
 		end
 
 		-- Scale dps with mirage quantity

@@ -1,0 +1,292 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pob-ai.local/schemas/build_snapshot.v1.json",
+  "title": "PoB AI Planner BuildSnapshot v1",
+  "$defs": {
+    "engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pobVersion",
+        "pobBranch",
+        "dataVersion",
+        "treeVersion",
+        "manifestFingerprint"
+      ],
+      "properties": {
+        "pobVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "pobBranch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "dataVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "treeVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "manifestFingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$"
+        }
+      }
+    },
+    "skill": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "groupIndex",
+        "skillIndex",
+        "effectId",
+        "gemId",
+        "slot"
+      ],
+      "properties": {
+        "groupIndex": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 48
+        },
+        "skillIndex": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 12
+        },
+        "effectId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "gemId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "slot": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "engine",
+    "skill",
+    "scenario",
+    "passiveNodes",
+    "passiveEdges",
+    "items",
+    "skillGroups",
+    "baselineMetrics"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "engine": {
+      "$ref": "#/$defs/engine"
+    },
+    "skill": {
+      "$ref": "#/$defs/skill"
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile",
+        "enemyPreset"
+      ],
+      "properties": {
+        "profile": {
+          "enum": [
+            "Current",
+            "PinnacleUnbuffed",
+            "PinnacleChassis"
+          ]
+        },
+        "enemyPreset": {
+          "enum": [
+            "Active",
+            "None",
+            "Boss",
+            "Pinnacle",
+            "Uber"
+          ]
+        }
+      }
+    },
+    "passiveNodes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "allocated",
+          "category"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "allocated": {
+            "type": "boolean"
+          },
+          "category": {
+            "type": "string",
+            "maxLength": 64
+          }
+        }
+      }
+    },
+    "passiveEdges": {
+      "type": "array",
+      "maxItems": 80000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "target"
+        ],
+        "properties": {
+          "source": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "target": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "items": {
+      "type": "array",
+      "maxItems": 80,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "slot",
+          "base",
+          "fingerprint"
+        ],
+        "properties": {
+          "slot": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "base": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "rarity": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "fingerprint": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          }
+        }
+      }
+    },
+    "skillGroups": {
+      "type": "array",
+      "maxItems": 48,
+      "items": {
+        "type": "object",
+        "required": [
+          "index",
+          "slot",
+          "gems"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 48
+          },
+          "slot": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "includedInFullDPS": {
+            "type": "boolean"
+          },
+          "gems": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+              "type": "object",
+              "required": [
+                "gemId",
+                "effectId",
+                "level",
+                "quality",
+                "origin"
+              ],
+              "properties": {
+                "gemId": {
+                  "type": "string",
+                  "maxLength": 160
+                },
+                "effectId": {
+                  "type": "string",
+                  "maxLength": 180
+                },
+                "level": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                },
+                "quality": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                "origin": {
+                  "enum": [
+                    "socketed_gem",
+                    "item_granted",
+                    "imbued",
+                    "unknown"
+                  ]
+                },
+                "support": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "baselineMetrics": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number"
+      }
+    }
+  }
+}

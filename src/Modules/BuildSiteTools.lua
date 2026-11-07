@@ -5,6 +5,8 @@
 --
 
 buildSites = { }
+local MAX_BUILD_CODE_BYTES = 16777216
+buildSites.MAX_BUILD_CODE_BYTES = MAX_BUILD_CODE_BYTES
 
 -- Import/Export websites list used in dropdowns
 -- label: What a user sees in the export dropdown and when the import box recognizes the website
@@ -81,34 +83,104 @@ function buildSites.UploadBuild(buildCode, websiteInfo)
 	return response
 end
 
---- Downloads a PoB build code from a website
---- @param link string A link to the site that contains the link to the raw build code
---- @param websiteInfo table? Contains the downloadUrl
---- @param callback function The function to call when the download is complete
-function buildSites.DownloadBuild(link, websiteInfo, callback)
-	local siteCodeURL
-	-- Only called on program start via protocol handler
-	if not websiteInfo then
+-- Resolve only provider entries defined by the native allowlist.
+local function nativeProviderById(providerId)
+	for _, siteInfo in ipairs(buildSites.websiteList) do
+		if siteInfo.id == providerId then return siteInfo end
+	end
+end
+
+-- Resolve against PoB's fixed provider allowlist. Caller-supplied provider
+-- tables are never trusted for regexes or destination hosts.
+--- @param link string A provider URL or a supported pob:// protocol URI
+--- @param websiteInfo table? Native provider entry selected by the caller
+--- @return string? resolved URL, string? resolution error, table? native provider
+function buildSites.ResolveDownloadURL(link, websiteInfo)
+	if type(link) ~= "string" or #link == 0 or #link > 4096 or link:find("[%c]") then
+		return nil, "Invalid build link"
+	end
+	local provider, siteCodeURL
+	if websiteInfo == nil then
+		-- Protocol-handler calls are accepted only when the URI names a native
+		-- provider; the destination host always comes from websiteList.
 		for _, siteInfo in ipairs(buildSites.websiteList) do
-			if link:match("^pob:[/\\]*" .. siteInfo.id:lower() .. "[/\\]+(.+)") then
-				siteCodeURL = link:gsub("^pob:[/\\]*" .. siteInfo.id:lower() .. "[/\\]+(.+)", "https://" .. siteInfo.downloadURL)
-				websiteInfo = siteInfo
+			local pattern = "^pob:[/\\\\]*" .. siteInfo.id:lower() .. "[/\\\\]+(.+)"
+			if link:match(pattern) then
+				provider = siteInfo
+				siteCodeURL = link:gsub(pattern, "https://" .. siteInfo.downloadURL)
 				break
 			end
 		end
-	else -- called via the ImportTab
-		siteCodeURL = link:gsub(websiteInfo.regexURL, websiteInfo.downloadURL)
-	end
-	if websiteInfo then
-		launch:DownloadPage(siteCodeURL, function(response, errMsg)
-			if errMsg then
-				callback(false, errMsg, siteCodeURL)
-			else
-				callback(true, response.body, siteCodeURL)
-			end
-		end)
+		if not provider then return nil, "Download information not found" end
 	else
-		callback(false, "Download information not found", siteCodeURL)
+		provider = type(websiteInfo) == "table" and nativeProviderById(websiteInfo.id) or nil
+		if not provider then return nil, "Download information not found" end
+		if type(provider.matchURL) ~= "string" or not link:match(provider.matchURL) then
+			return nil, "Link does not match selected provider"
+		end
+		if provider.id == "POBBin" and link:match("^https://pobb%.in/u/") then
+			-- Profile pages use /u/<profile>/<build>, while PoBB's raw export
+			-- endpoint uses /pob/<profile>:<build>. Keep encoded profile
+			-- discriminators such as %23 intact.
+			local profile, buildId = link:match("^https://pobb%.in/u/([^/?#]+)/([^/?#]+)/?$")
+			if not profile or not buildId then return nil, "Invalid PoBB profile build URL" end
+			siteCodeURL = "https://pobb.in/pob/" .. profile .. ":" .. buildId
+		else
+			local replacements
+			siteCodeURL, replacements = link:gsub(provider.regexURL, provider.downloadURL)
+			if replacements ~= 1 or siteCodeURL == link then
+				return nil, "Invalid link for selected provider"
+			end
+		end
+	end
+	return siteCodeURL, nil, provider
+end
+
+--- Downloads a PoB build code from an allowlisted website.
+--- @param link string A supported provider URL or pob:// protocol URI
+--- @param websiteInfo table? Native provider entry; nil for protocol-handler links
+--- @param callback function Receives success, body/error, and resolved URL
+--- @param options table? Internal download options; followRedirects defaults to true
+function buildSites.DownloadBuild(link, websiteInfo, callback, options)
+	if type(callback) ~= "function" then return nil, "Download callback is required" end
+	options = type(options) == "table" and options or { }
+	local siteCodeURL, resolveError = buildSites.ResolveDownloadURL(link, websiteInfo)
+	if not siteCodeURL then
+		callback(false, resolveError, nil)
+		return
+	end
+	local completed = false
+	local function finish(success, data, reason)
+		if completed then return end
+		completed = true
+		callback(success, data, siteCodeURL, reason)
+	end
+	local function onDownload(response, errMsg)
+		if errMsg then
+			local responseCode = tonumber(tostring(errMsg):match("^Response code: (%d+)$"))
+			if options.followRedirects == false and responseCode and responseCode >= 300 and responseCode < 400 then
+				finish(false, "Optimizer study imports do not follow redirects; use the provider's canonical PoB URL or a local PoB export", "redirect_disallowed")
+				return
+			end
+			if errMsg == "Response exceeded maximum allowed size" then
+				finish(false, "Build download exceeds the size limit", "download_too_large")
+			else
+				finish(false, errMsg, "download_failed")
+			end
+		elseif type(response) ~= "table" or type(response.body) ~= "string" or response.body == "" then
+			finish(false, "Build provider returned no usable export", "download_invalid_response")
+		elseif #response.body > MAX_BUILD_CODE_BYTES then
+			finish(false, "Build download exceeds the size limit", "download_too_large")
+		else
+			finish(true, response.body)
+		end
+	end
+	local ok, requestId = pcall(launch.DownloadPage, launch, siteCodeURL, onDownload,
+		{ maxResponseBytes = MAX_BUILD_CODE_BYTES, followRedirects = options.followRedirects ~= false })
+	if not ok then
+		finish(false, "Unable to start build download", "download_start_failed")
+	elseif not completed and not requestId then
+		finish(false, "Unable to start build download", "download_start_failed")
 	end
 end
 
