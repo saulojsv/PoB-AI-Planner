@@ -431,7 +431,7 @@
 	<File name="Modules/Optimizer/BuildReviewPair.lua" part="program" sha1="99306b73b6894883876a8719d90f617676287b78" />
 	<File name="Modules/Optimizer/BuildReviewScout.lua" part="program" sha1="9c60924652e2e9a651cdb31c893d19d73c7e173b" />
 	<File name="Modules/Optimizer/CallbackRequest.lua" part="program" sha1="97857e0aba212d36a0f7b81fa461e537963d0898" />
-	<File name="Modules/Optimizer/Candidate.lua" part="program" sha1="6164b05aa314c25757e1b2800e66cb2f396a5ac4" />
+	<File name="Modules/Optimizer/Candidate.lua" part="program" sha1="6ed3d998efb54acb95da43c4e4e3336245d6c93a" />
 	<File name="Modules/Optimizer/CandidateIdentity.lua" part="program" sha1="1f6fac66b5c5fee9de46bf6990a7eaaa4230a7a4" />
 	<File name="Modules/Optimizer/CatalogCoverage.lua" part="program" sha1="03b5174fa54417891c9379aa5d5870bcef4f294f" />
 	<File name="Modules/Optimizer/CatalystSearch.lua" part="program" sha1="4f349d11965aca4a6ef8ea72ee88389bcb6f5627" />

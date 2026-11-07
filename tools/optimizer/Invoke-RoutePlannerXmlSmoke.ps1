@@ -784,12 +784,55 @@ local routeApplicationTest
 if $applyParetoIndexLua > 0 then
 	local route = result.paretoFront[$applyParetoIndexLua]
 	assert(route, "Requested route application test is outside the exact Pareto results")
+	local previewSpec, previewSpecError = Candidate.BuildPassiveSpec(build, route.nodeIds, route.removeNodeIds, route)
+	assert(previewSpec, "Could not reconstruct the exact passive projection before Apply: " .. tostring(previewSpecError))
+	local function passiveAllocationSignature(spec)
+		local nodeIds = { }
+		for nodeId in pairs(spec.allocNodes or { }) do nodeIds[#nodeIds + 1] = tonumber(nodeId) end
+		table.sort(nodeIds)
+		return table.concat(nodeIds, ","), #nodeIds
+	end
+	local previewAllocationSignature, previewAllocatedNodeCount = passiveAllocationSignature(previewSpec)
 	local applyBefore = Candidate.BuildSignature(build)
 	local callOk, applied, applyError = pcall(Candidate.Apply, build, route)
 	if not callOk then applyError, applied = tostring(applied), false end
-	if applied then build.calcsTab:BuildOutput() end
+	if applied then
+		-- Mirror Build.Update's native invalidation/recalculation sequence so the
+		-- smoke checks the metrics the full PoB UI will display after Apply.
+		build.buildFlag = false
+		if build.skillsTab and type(build.skillsTab.UpdateSocketGroups) == "function" then
+			build.skillsTab:UpdateSocketGroups()
+		end
+		wipeGlobalCache()
+		build.calcsTab:BuildOutput()
+		local appliedLevel = build.characterLevel
+		if type(build.RefreshStatList) == "function" then build:RefreshStatList() end
+		if build.characterLevel ~= appliedLevel then
+			if build.configTab and type(build.configTab.BuildModList) == "function" then build.configTab:BuildModList() end
+			wipeGlobalCache()
+			build.calcsTab:BuildOutput()
+			if type(build.RefreshStatList) == "function" then build:RefreshStatList() end
+		end
+	end
 	local appliedSignature = Candidate.BuildSignature(build)
 	local output = build.calcsTab and build.calcsTab.mainOutput or {}
+	local appliedAllocationSignature, appliedAllocatedNodeCount = passiveAllocationSignature(build.spec or { })
+	local metricParity, metricsChecked, metricDifferences = true, 0, { }
+	local previewMetrics = route.evaluation and route.evaluation.metrics or { }
+	for _, key in ipairs({ "CombinedDPS", "FullDPS", "TotalEHP", "Life", "EnergyShield", "Ward", "Armour", "Evasion",
+		"PhysicalMaximumHitTaken", "FireMaximumHitTaken", "ColdMaximumHitTaken", "LightningMaximumHitTaken",
+		"ChaosMaximumHitTaken", "FireResist", "ColdResist", "LightningResist", "ChaosResist",
+		"BlockChance", "SpellBlockChance", "SpellSuppressionChance" }) do
+		local expected, actual = previewMetrics[key], output[key]
+		if type(expected) == "number" then
+			metricsChecked = metricsChecked + 1
+			local tolerance = math.max(0.00000001, math.abs(expected) * 0.000000000001)
+			if type(actual) ~= "number" or math.abs(actual - expected) > tolerance then
+				metricParity = false
+				metricDifferences[key] = { preview = expected, applied = actual }
+			end
+		end
+	end
 	routeApplicationTest = {
 		index = $applyParetoIndexLua,
 		label = tostring((route.evaluation and route.evaluation.candidateLabel) or route.label or ""),
@@ -797,9 +840,21 @@ if $applyParetoIndexLua > 0 then
 		error = applied == true and nil or tostring(applyError or "Candidate.Apply returned false"),
 		isolatedHeadlessBuild = true,
 		changedBuildSignature = applyBefore ~= appliedSignature,
+		previewCharacterLevel = route.evaluation and route.evaluation.characterLevel or nil,
+		appliedCharacterLevel = build.characterLevel,
+		previewAllocatedNodeCount = previewAllocatedNodeCount,
+		appliedAllocatedNodeCount = appliedAllocatedNodeCount,
+		treeAllocationMatchesPreview = previewAllocationSignature == appliedAllocationSignature,
+		metricsChecked = metricsChecked,
+		metricParity = metricParity,
+		metricDifferences = metricDifferences,
 		metrics = {
 			CombinedDPS = output.CombinedDPS,
 			TotalEHP = output.TotalEHP,
+			Life = output.Life,
+			EnergyShield = output.EnergyShield,
+			Armour = output.Armour,
+			Evasion = output.Evasion,
 			PhysicalMaximumHitTaken = output.PhysicalMaximumHitTaken,
 			FireMaximumHitTaken = output.FireMaximumHitTaken,
 			ColdMaximumHitTaken = output.ColdMaximumHitTaken,
@@ -990,17 +1045,28 @@ local routeReport = {status = result.status or "unknown",
 	sourceBuildUnchanged = before == after, routeMemoryWritesDisabled = true,
 	completed = tab.job == nil}
 local routeReportJson = json.encode(routeReport)
-print("QA_ROUTE_RESULT " .. routeReportJson)
 if "$resultJsonPathLua" ~= "" then
 	local resultFile, resultFileError = io.open("$resultJsonPathLua", "wb")
 	assert(resultFile, "Could not create route report: " .. tostring(resultFileError))
 	resultFile:write(routeReportJson, "\n")
 	resultFile:close()
 end
+print("QA_ROUTE_RESULT " .. json.encode({
+	status = routeReport.status, proposalLimit = routeReport.proposalLimit,
+	generatedCandidates = routeReport.generatedCandidates, uniqueCandidates = routeReport.uniqueCandidates,
+	retainedCandidates = routeReport.retainedCandidates, exactEvaluations = routeReport.exactEvaluations,
+	exactEvaluationBudget = routeReport.exactEvaluationBudget, paretoCount = routeReport.paretoCount,
+	routeLabels = routeReport.routeLabels, sourceBuildUnchanged = routeReport.sourceBuildUnchanged,
+	searchTimedOut = routeReport.searchTimedOut, routeApplicationTest = routeReport.routeApplicationTest,
+}))
 assert(before == after, "Route search changed the imported source build")
 assert(tab.job == nil, "Route search exceeded its tick budget")
 assert(not routeApplicationTest or routeApplicationTest.applied,
 	"Disposable exact Pareto route application failed: " .. tostring(routeApplicationTest and routeApplicationTest.error))
+assert(not routeApplicationTest or routeApplicationTest.treeAllocationMatchesPreview,
+	"Applied passive-tree allocation differs from the native exact projection")
+assert(not routeApplicationTest or (routeApplicationTest.metricsChecked > 0 and routeApplicationTest.metricParity),
+	"Metrics changed between the exact route preview and its applied passive-tree variation")
 "@
 
 $oldPath = $env:PATH

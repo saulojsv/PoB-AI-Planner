@@ -1348,7 +1348,16 @@ function candidate.Apply(build, resultCandidate)
 			if not sourceSocket or sourceSocket.type ~= "Socket" then return false, "A candidate jewel source is no longer a native PoB socket" end
 		end
 	end
-	if #resultJewelVariants > 0 then
+	local hasTreeMutation = (resultCandidate.nodeIds and #resultCandidate.nodeIds > 0)
+		or (resultCandidate.removeNodeIds and #resultCandidate.removeNodeIds > 0)
+		or resultCandidate.classVariant or resultCandidate.ascendancyVariant or resultCandidate.jewelVariant
+		or #resultJewelVariants > 0 or resultCandidate.masteryVariant or resultCandidate.tattooVariant or resultCandidate.timelessVariant
+	local projectedTreeState
+	if hasTreeMutation then
+		-- Use the same native PoB projection that exact evaluation used. Rebuilding
+		-- an undo state from only the requested target IDs can omit connector nodes
+		-- that PassiveSpec:AllocNode added along the legal path, so the applied
+		-- variation may calculate different defenses from the exact preview.
 		local projectionVariants = {
 			classId = resultCandidate.classVariant and resultCandidate.classVariant.classId or nil,
 			ascendancyVariant = resultCandidate.ascendancyVariant,
@@ -1358,84 +1367,23 @@ function candidate.Apply(build, resultCandidate)
 			timelessVariant = resultCandidate.timelessVariant,
 			anointVariant = resultCandidate.anointVariant,
 			anointVariants = resultCandidate.anointVariants,
-			gearVariant = resultCandidate.gearVariant,
+			gearVariant = gearVariant,
 		}
 		local projected, projectionError = candidate.BuildPassiveSpec(build,
 			resultCandidate.nodeIds, resultCandidate.removeNodeIds, projectionVariants)
-		if not projected then return false, projectionError or "PoB could not reconstruct the selected jewel placements" end
+		if not projected then return false, projectionError or "PoB could not reconstruct the selected passive-tree variation" end
+		projectedTreeState = projected:CreateUndoState()
+		if type(projectedTreeState) ~= "table" or type(projectedTreeState.hashList) ~= "table" then
+			return false, "PoB could not serialize the exact projected passive-tree variation"
+		end
 	end
-	local hasTreeMutation = (resultCandidate.nodeIds and #resultCandidate.nodeIds > 0)
-		or (resultCandidate.removeNodeIds and #resultCandidate.removeNodeIds > 0)
-		or resultCandidate.classVariant or resultCandidate.ascendancyVariant or resultCandidate.jewelVariant
-		or #resultJewelVariants > 0 or resultCandidate.masteryVariant or resultCandidate.tattooVariant or resultCandidate.timelessVariant
 	if hasTreeMutation then
 		if timelessItem then
 			timelessItem.id = nil -- ItemsTab assigns a fresh ID; the source jewel stays unchanged.
 			build.itemsTab:AddItem(timelessItem, true)
 			build.itemsTab.modFlag = true
 		end
-		local state = sourceSpec:CreateUndoState()
-		if resultCandidate.classVariant then
-			local classId = resultCandidate.classVariant.classId
-			if not sourceSpec.tree.classes[classId] then
-				return false, "The selected base class is no longer available in this passive-tree version"
-			end
-			state.classId = classId
-			state.ascendClassId = 0
-			state.secondaryAscendClassId = 0
-			state.hashList = { }
-			state.hashOverrides = { }
-			state.masteryEffects = { }
-		end
-		if resultCandidate.ascendancyVariant then
-			local classId = resultCandidate.classVariant and resultCandidate.classVariant.classId or state.classId
-			local class = sourceSpec.tree.classes[classId]
-			local ascendClassId = tonumber(resultCandidate.ascendancyVariant.ascendClassId)
-			local secondaryAscendClassId = tonumber(resultCandidate.ascendancyVariant.secondaryAscendClassId) or 0
-			if not class or not ascendClassId or ascendClassId < 0 or ascendClassId ~= math.floor(ascendClassId) or not class.classes[ascendClassId] then
-				return false, "The selected main ascendancy is no longer available in this PoB tree version"
-			end
-			if secondaryAscendClassId < 0 or secondaryAscendClassId ~= math.floor(secondaryAscendClassId)
-				or (secondaryAscendClassId ~= 0 and not (sourceSpec.tree.alternate_ascendancies or { })[secondaryAscendClassId]) then
-				return false, "The selected secondary ascendancy is no longer available in this PoB tree version"
-			end
-			state.ascendClassId = ascendClassId
-			state.secondaryAscendClassId = secondaryAscendClassId
-			if not resultCandidate.classVariant then
-				state.hashList = filterUnselectedAscendancyNodes(state.hashList, sourceSpec, classId, ascendClassId, secondaryAscendClassId)
-			end
-		end
-		local allocated = { }
-		for _, nodeId in ipairs(state.hashList) do allocated[nodeId] = true end
-		local removeSet = { }
-		for _, nodeId in ipairs(resultCandidate.removeNodeIds or { }) do removeSet[nodeId] = true end
-		if next(removeSet) then
-			local filtered = { }
-			for _, nodeId in ipairs(state.hashList) do
-				if not removeSet[nodeId] then filtered[#filtered + 1] = nodeId end
-			end
-			state.hashList = filtered
-			for nodeId in pairs(removeSet) do state.masteryEffects[nodeId] = nil end
-			allocated = { }
-			for _, nodeId in ipairs(state.hashList) do allocated[nodeId] = true end
-		end
-		local containsClusterJewel = false
-		for _, variant in ipairs(resultJewelVariants) do
-			if variant.sourceKind == "cluster" then containsClusterJewel = true break end
-		end
-		for _, nodeId in ipairs(resultCandidate.nodeIds or { }) do
-			-- PassiveSpec imports unknown node IDs into allocSubgraphNodes, then
-			-- BuildClusterJewelGraphs recreates and allocates them after the native
-			-- cluster graph exists. This is PoB's persistence path for virtual nodes.
-			if (sourceSpec.nodes[nodeId] or containsClusterJewel)
-				and (resultCandidate.classVariant or not sourceSpec.allocNodes[nodeId]) and not allocated[nodeId] then
-				state.hashList[#state.hashList + 1] = nodeId
-				allocated[nodeId] = true
-			end
-		end
-		if resultCandidate.masteryVariant then
-			state.masteryEffects[resultCandidate.masteryVariant.nodeId] = resultCandidate.masteryVariant.effectId
-		end
+		local state = projectedTreeState
 		local newJewels = resultCandidate.classVariant and { } or copyTable(sourceSpec.jewels)
 		for _, variant in ipairs(resultJewelVariants) do
 			if variant.fromNodeId and variant.fromNodeId > 0 then
@@ -1445,12 +1393,6 @@ function candidate.Apply(build, resultCandidate)
 		end
 		if resultCandidate.timelessVariant then
 			newJewels[resultCandidate.timelessVariant.nodeId] = timelessItem.id
-		end
-		if resultCandidate.tattooVariant then
-			local variant = resultCandidate.tattooVariant
-			local tattoo = copyTable(sourceSpec.tree.tattoo.nodes[variant.tattooId], true)
-			tattoo.id = variant.nodeId
-			state.hashOverrides[variant.nodeId] = tattoo
 		end
 		local newSpec = new("PassiveSpec"):PassiveSpec(build, sourceSpec.treeVersion)
 		newSpec.jewels = newJewels
@@ -1575,6 +1517,28 @@ function candidate.Apply(build, resultCandidate)
 	end
 	if socketBinding and build.skillsTab and type(build.skillsTab.UpdateSocketGroups) == "function" then
 		build.skillsTab:UpdateSocketGroups()
+	end
+	-- Exact evaluation may use a higher (or lower) Auto level because the
+	-- selected passive variation has a different point count. Sync PoB's shared
+	-- character-level control before the next native output rebuild; otherwise
+	-- the new tree is active but the UI can briefly calculate with the seed's
+	-- old level and display values that disagree with the exact route preview.
+	if build.characterLevelAutoMode == true then
+		local evaluatedLevel = resultCandidate.evaluation and tonumber(resultCandidate.evaluation.characterLevel)
+		if isFinite(evaluatedLevel) and evaluatedLevel >= 1 and evaluatedLevel <= 100
+			and evaluatedLevel == math.floor(evaluatedLevel) then
+			build.characterLevel = evaluatedLevel
+			if build.controls and build.controls.characterLevel
+				and type(build.controls.characterLevel.SetText) == "function" then
+				build.controls.characterLevel:SetText(evaluatedLevel)
+			end
+			if build.configTab and type(build.configTab.BuildModList) == "function" then
+				build.configTab:BuildModList()
+			end
+		elseif type(build.EstimatePlayerProgress) == "function" then
+			-- Older feasible results may not carry a serialized exact level.
+			build:EstimatePlayerProgress()
+		end
 	end
 
 	build.modFlag = true
