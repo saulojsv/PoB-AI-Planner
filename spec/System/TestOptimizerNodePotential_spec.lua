@@ -194,6 +194,7 @@ describe("AI Planner exact node-potential review", function()
 			and broadBaseline.nodeIds[2] or broadBaseline.nodeIds[1]
 		local broadPreferred = broadBaselineConnector == left.id and right or left
 		broadPreferred.power = { singleStat = 1000 }
+		target.power = { singleStat = 1 }
 		broadParsed.search.useShowNodePower = true
 		broadParsed.search.nodePowerStat = "CombinedDPS"
 		broadParsed.search.nodePowerFocusStat = "CombinedDPS"
@@ -207,6 +208,98 @@ describe("AI Planner exact node-potential review", function()
 		assert.are.same(baseline.nodeIds, mismatched.nodeIds,
 			"a cache for another stat must not guide the route")
 		assert.are.equal("unavailable", parsed.search.nodePowerCoverage.routePath.status)
+		newBuild()
+	end)
+
+	it("uses native Node Power utility to accept a longer path within the point cap", function()
+		newBuild()
+		local start = { id = 1, type = "ClassStart", alloc = true, linked = { } }
+		local direct = { id = 2, type = "Normal", alloc = false, linked = { } }
+		local highA = { id = 3, type = "Normal", alloc = false, linked = { } }
+		local highB = { id = 4, type = "Normal", alloc = false, linked = { } }
+		local target = { id = 5, type = "Notable", alloc = false, linked = { }, dn = "Target" }
+		local function connect(left, right)
+			left.linked[#left.linked + 1] = right
+			right.linked[#right.linked + 1] = left
+		end
+		connect(start, direct)
+		connect(direct, target)
+		connect(start, highA)
+		connect(highA, highB)
+		connect(highB, target)
+		local spec = {
+			nodes = { [1] = start, [2] = direct, [3] = highA, [4] = highB, [5] = target },
+			allocNodes = { [1] = start },
+			tree = { classes = { [1] = { name = "Test", startNodeId = 1 } } },
+		}
+		local parsed = assert(Inputs.Parse({ generationPhase = "tree", maxAddedPoints = "3",
+			evaluationBudget = "8", seed = "41" }))
+		parsed.targetNodeIds = { target.id }
+		local baseline = assert(TreeSearch.BuildCandidateNodes(spec, parsed, 8, nil, 3))[1]
+		assert.are.same({ 2, 5 }, baseline.nodeIds, "without native power the shorter legal path should win")
+		direct.power = { singleStat = -1000 }
+		highA.power = { singleStat = 1000 }
+		highB.power = { singleStat = 1000 }
+		parsed.search.useShowNodePower = true
+		parsed.search.nodePowerStat = "CombinedDPS"
+		parsed.search.nodePowerFocusStat = "CombinedDPS"
+		local powered = assert(TreeSearch.BuildCandidateNodes(spec, parsed, 8, nil, 3))[1]
+		assert.are.same({ 3, 4, 5 }, powered.nodeIds,
+			"utility-weighted A* should choose the longer path when its native power compensates for one extra point")
+		assert.are.equal(3, powered.routePointCost)
+		assert.is_true(powered.nodePowerGuidedPath)
+		assert.are.equal(2, powered.nodePowerPathUtility)
+		assert.is_true(parsed.search.nodePowerCoverage.routePath.utilityGuidedPathsGenerated > 0)
+		newBuild()
+	end)
+
+	it("uses utility-weighted route cost in the shared path field", function()
+		newBuild()
+		local start = { id = 1, type = "ClassStart", alloc = true, linked = { } }
+		local direct = { id = 2, type = "Normal", alloc = false, linked = { } }
+		local highA = { id = 3, type = "Normal", alloc = false, linked = { } }
+		local highB = { id = 4, type = "Normal", alloc = false, linked = { } }
+		local target = { id = 5, type = "Notable", alloc = false, linked = { }, dn = "Target" }
+		local function connect(left, right)
+			left.linked[#left.linked + 1] = right
+			right.linked[#right.linked + 1] = left
+		end
+		connect(start, direct)
+		connect(direct, target)
+		connect(start, highA)
+		connect(highA, highB)
+		connect(highB, target)
+		local nodes = { [1] = start, [2] = direct, [3] = highA, [4] = highB, [5] = target }
+		for nodeId = 6, 135 do
+			local leaf = { id = nodeId, type = "Normal", alloc = false, linked = { } }
+			nodes[nodeId] = leaf
+			connect(start, leaf)
+		end
+		local spec = { nodes = nodes, allocNodes = { [1] = start },
+			tree = { classes = { [1] = { name = "Test", startNodeId = 1 } } } }
+		local parsed = assert(Inputs.Parse({ generationPhase = "tree", maxAddedPoints = "3",
+			evaluationBudget = "32", seed = "43" }))
+		local baselineCandidates = assert(TreeSearch.BuildCandidateNodes(spec, parsed, 32, nil, 3))
+		local baseline
+		for _, candidate in ipairs(baselineCandidates) do if candidate.targetId == target.id then baseline = candidate break end end
+		assert.is_truthy(baseline, "the broad baseline should include the selected notable")
+		assert.are.same({ 2, 5 }, baseline.nodeIds)
+		direct.power = { singleStat = -1000 }
+		highA.power = { singleStat = 1000 }
+		highB.power = { singleStat = 1000 }
+		target.power = { singleStat = 1 }
+		parsed.search.useShowNodePower = true
+		parsed.search.nodePowerStat = "CombinedDPS"
+		parsed.search.nodePowerFocusStat = "CombinedDPS"
+		local poweredCandidates = assert(TreeSearch.BuildCandidateNodes(spec, parsed, 32, nil, 3))
+		local powered
+		for _, candidate in ipairs(poweredCandidates) do if candidate.targetId == target.id then powered = candidate break end end
+		assert.is_truthy(powered, "the broad weighted path field should retain the positive native target")
+		assert.are.same({ 3, 4, 5 }, powered.nodeIds)
+		assert.are.equal(3, powered.routePointCost)
+		assert.is_true(powered.nodePowerGuidedPath)
+		assert.is_true(parsed.search.nodePowerCoverage.routePath.utilityGuidedPathsGenerated > 0)
+		assert.is_true(parsed.search.nodePowerCoverage.routePath.nonpositiveTargetsPruned > 0)
 		newBuild()
 	end)
 

@@ -17,6 +17,7 @@ local MAX_ARCHIVED_ROUTE_VARIANTS_PER_PATTERN = 4
 local MAX_NODE_POWER_HOTSPOT_CHAINS = 3
 local MAX_NODE_POWER_HOTSPOT_POOL = 32
 local MAX_KEY_NODE_DISTANCE_INDEX = 768
+local NODE_POWER_ROUTE_UTILITY_WEIGHT = 0.5
 local timelessTypeByConqueror = {
 	vaal = 1,
 	karui = 2,
@@ -72,8 +73,8 @@ end
 -- Build a bounded, normalized utility map from the already-calculated native
 -- Show Node Power cache. `singleStat` is the marginal value of entering one
 -- node; `pathPower` describes a whole connection and is used only to rank that
--- target. This map is a secondary path tie-break, never a replacement for
--- passive-point cost or exact PoB evaluation.
+-- target. The normalized single-node utility changes route ordering, while the
+-- separate integer point budget and exact PoB calculation remain authoritative.
 local function buildNodePowerRouteHints(spec, inputs)
 	local search = inputs and inputs.search
 	if not search then
@@ -85,10 +86,13 @@ local function buildNodePowerRouteHints(spec, inputs)
 		search.nodePowerCoverage = search.nodePowerCoverage or { }
 		search.nodePowerCoverage.routePath = {
 			status = search.useShowNodePower == true and "unavailable" or "disabled",
-			selection = "equal_point_cost_utility_tiebreak",
+			selection = "utility_weighted_astar_and_bounded_hotspot_chains",
+			utilityWeight = NODE_POWER_ROUTE_UTILITY_WEIGHT,
 			hintedNodes = 0,
 			hotspotCandidates = 0,
 			hotspotChainsGenerated = 0,
+			utilityGuidedPathsGenerated = 0,
+			nonpositiveTargetsPruned = 0,
 			stat = search.nodePowerStat,
 		}
 		return { }, 0
@@ -114,10 +118,13 @@ local function buildNodePowerRouteHints(spec, inputs)
 	search.nodePowerCoverage = search.nodePowerCoverage or { }
 	search.nodePowerCoverage.routePath = {
 		status = count > 0 and "available" or "unavailable",
-		selection = "equal_cost_tiebreak_and_bounded_hotspot_chains",
+		selection = "utility_weighted_astar_and_bounded_hotspot_chains",
+		utilityWeight = NODE_POWER_ROUTE_UTILITY_WEIGHT,
 		hintedNodes = count,
 		hotspotCandidates = 0,
 		hotspotChainsGenerated = 0,
+		utilityGuidedPathsGenerated = 0,
+		nonpositiveTargetsPruned = 0,
 		stat = search.nodePowerStat,
 	}
 	if count > 0 then
@@ -369,6 +376,39 @@ local function heuristic(node, goals, maxEdgeLength)
 	return best == math.huge and 0 or best
 end
 
+local function nodePowerGuided(hints)
+	return type(hints) == "table" and next(hints) ~= nil
+end
+
+local function nodePowerEdgeCost(hints, nodeId)
+	local utility = hints and hints[nodeId] or 0
+	if not isFinite(utility) then utility = 0 end
+	utility = math.max(-1, math.min(1, utility))
+	return 1 - NODE_POWER_ROUTE_UTILITY_WEIGHT * utility
+end
+
+local function pathHeuristic(node, goals, maxEdgeLength, weighted, starts, nodes)
+	if not weighted then return heuristic(node, goals, maxEdgeLength) end
+	-- Allocated seeds cost zero to enter. Taking the minimum lower bound from
+	-- any free seed keeps A* admissible when a route may reconnect to the build.
+	local best = heuristic(node, goals, maxEdgeLength)
+	for seedId in pairs(starts or { }) do
+		local seed = nodes[seedId]
+		if seed then best = math.min(best, heuristic(seed, goals, maxEdgeLength)) end
+	end
+	return best * (1 - NODE_POWER_ROUTE_UTILITY_WEIGHT)
+end
+
+local function pathLabelIsBetter(cost, utility, points, oldCost, oldUtility, oldPoints)
+	if oldCost == nil or cost < oldCost - 1e-9 then return true end
+	if math.abs(cost - oldCost) > 1e-9 then return false end
+	if utility > (oldUtility or -math.huge) + 1e-9 then return true end
+	if math.abs(utility - (oldUtility or -math.huge)) <= 1e-9 then
+		return points < (oldPoints or math.huge)
+	end
+	return false
+end
+
 -- The passive-tree topology is immutable for a parsed spec. Cache its compact
 -- numeric adjacency by the nodes table, while validating node/link identities
 -- and cardinalities so a rebuilt or expanded fixture cannot reuse stale paths.
@@ -524,17 +564,25 @@ local function keyNodeDistance(index, leftId, rightId)
 end
 
 local function findPath(spec, seedNodes, goals, regionByNode, forbidden, allowed, blockedNodeIds, tieSeed, maxEdgeLength, control, progressFunc, progressDone, progressTotal, maxCost, inputs, nodePowerHints, adjacency)
-	local open, gScore, utilityScore, cameFrom, closed = { }, { }, { }, { }, { }
-	local useNodePowerPathTie = type(nodePowerHints) == "table" and next(nodePowerHints) ~= nil
+	local open, gScore, utilityScore, pointCost, cameFrom, closed = { }, { }, { }, { }, { }, { }
+	local useNodePowerPathTie = nodePowerGuided(nodePowerHints)
 	if not maxEdgeLength then maxEdgeLength = select(1, getSearchGraph(spec, inputs and inputs.search)) end
 	local starts = { }
 	for _, source in pairs(seedNodes) do
 		if source and spec.nodes[source.id] and not starts[source.id] then
 			starts[source.id] = true
+		end
+	end
+	local queuedStarts = { }
+	for _, source in pairs(seedNodes) do
+		if source and starts[source.id] and not queuedStarts[source.id] then
+			queuedStarts[source.id] = true
 			gScore[source.id] = 0
 			utilityScore[source.id] = 0
+			pointCost[source.id] = 0
 			heapPush(open, { id = source.id, g = 0, utility = 0,
-				f = heuristic(source, goals, maxEdgeLength), tie = (source.id + tieSeed) % 997 })
+				points = 0, f = pathHeuristic(source, goals, maxEdgeLength, useNodePowerPathTie, starts, spec.nodes),
+				tie = (source.id + tieSeed) % 997 })
 		end
 	end
 	local reached, reachedCost, reachedUtility
@@ -542,14 +590,16 @@ local function findPath(spec, seedNodes, goals, regionByNode, forbidden, allowed
 	while #open > 0 do
 		if control and control.cancelled then return nil, nil, "cancelled" end
 		local current = heapPop(open)
-		-- A*'s f score is an admissible lower bound on the number of new
-		-- passive points needed to reach any goal. Stop as soon as no route
-		-- can fit the remaining point budget instead of exploring the whole tree.
-		if maxCost and current.f > maxCost then break end
-		if useNodePowerPathTie and reachedCost and current.f > reachedCost then break end
+		-- In ordinary mode f is a lower bound on passive points. In Node Power
+		-- mode f is a lower bound on weighted route cost; pointCost remains a
+		-- separate hard cap and may not be replaced by the utility objective.
+		if maxCost and not useNodePowerPathTie and current.f > maxCost then break end
+		if maxCost and (pointCost[current.id] or math.huge) > maxCost then break end
+		if useNodePowerPathTie and reachedCost and current.f > reachedCost + 1e-9 then break end
 		local currentUtility = utilityScore[current.id]
 		if not closed[current.id] and current.g == gScore[current.id]
-			and currentUtility ~= nil and (tonumber(current.utility) or 0) == currentUtility then
+			and currentUtility ~= nil and (tonumber(current.utility) or 0) == currentUtility
+			and current.points == pointCost[current.id] then
 			closed[current.id] = true
 			expanded = expanded + 1
 			if progressFunc and expanded % 128 == 0 then
@@ -579,25 +629,29 @@ local function findPath(spec, seedNodes, goals, regionByNode, forbidden, allowed
 							and other.type ~= "Mastery" and not other.ascendancyName
 						))
 						if canTraverse and (isSeed or not blocked) then
-							local tentative = current.g + (isSeed and 0 or 1)
+							local tentativePoints = current.points + (isSeed and 0 or 1)
 							local stepUtility = not isSeed and nodePowerHints and nodePowerHints[other.id] or 0
 							local tentativeUtility = currentUtility + (isFinite(stepUtility) and stepUtility or 0)
+							local tentative = current.g + (isSeed and 0
+								or useNodePowerPathTie and nodePowerEdgeCost(nodePowerHints, other.id) or 1)
 							local oldDistance, oldUtility = gScore[other.id], utilityScore[other.id]
-							if not oldDistance or tentative < oldDistance
-								or tentative == oldDistance and tentativeUtility > (oldUtility or -math.huge) then
+							local oldPoints = pointCost[other.id]
+							if (not maxCost or tentativePoints <= maxCost)
+								and pathLabelIsBetter(tentative, tentativeUtility, tentativePoints, oldDistance, oldUtility, oldPoints) then
 								gScore[other.id] = tentative
 								utilityScore[other.id] = tentativeUtility
+								pointCost[other.id] = tentativePoints
 								cameFrom[other.id] = current.id
-								local h = heuristic(other, goals, maxEdgeLength)
-								-- Imported exact-engine builds can nudge only an equal-cost
-								-- A* tie. This changes route order, never point cost, topology,
+								local h = pathHeuristic(other, goals, maxEdgeLength, useNodePowerPathTie, starts, spec.nodes)
+								-- Imported exact-engine builds can nudge an equal-score
+								-- A* tie. They never change the hard point budget, topology,
 								-- region filtering, or final PoB feasibility.
 								local tie = ((other.id * 31) + tieSeed) % 997
 								local edgePriority = importedEdgeEvidencePriority(current.id, other.id, inputs)
 								if edgePriority > 0 then tie = tie - math.floor(edgePriority * 64) end
 								if closed[other.id] then closed[other.id] = nil end
 								heapPush(open, { id = other.id, g = tentative, utility = tentativeUtility,
-									f = tentative + h, tie = tie })
+									points = tentativePoints, f = tentative + h, tie = tie })
 							end
 						end
 					end
@@ -611,7 +665,11 @@ local function findPath(spec, seedNodes, goals, regionByNode, forbidden, allowed
 		table.insert(route, 1, spec.nodes[cursor])
 		cursor = cameFrom[cursor]
 	end
-	return route, reached
+	return route, reached, nil, {
+		pointCost = pointCost[reached] or #route,
+		weightedCost = reachedCost,
+		nodePowerUtility = reachedUtility or 0,
+	}
 end
 
 -- For broad route pools, run one bounded multi-source shortest-path field per
@@ -619,7 +677,8 @@ end
 -- Entering an allocated seed costs zero; each proposed node costs one point.
 local function buildPathField(spec, seedNodes, regionByNode, forbidden, allowed, blockedNodeIds,
 	tieSeed, maxCost, inputs, control, progressFunc, nodePowerHints, adjacency)
-	local open, distance, utilityScore, cameFrom, closed, starts = { }, { }, { }, { }, { }, { }
+	local open, distance, utilityScore, pointCost, cameFrom, closed, starts = { }, { }, { }, { }, { }, { }, { }
+	local useNodePowerPathCost = nodePowerGuided(nodePowerHints)
 	local orderedSeeds = { }
 	for _, source in pairs(seedNodes or { }) do
 		if source and spec.nodes[source.id] and not starts[source.id] then
@@ -631,16 +690,19 @@ local function buildPathField(spec, seedNodes, regionByNode, forbidden, allowed,
 	for _, source in ipairs(orderedSeeds) do
 		distance[source.id] = 0
 		utilityScore[source.id] = 0
-		heapPush(open, { id = source.id, g = 0, utility = 0, f = 0, tie = (source.id + tieSeed) % 997 })
+		pointCost[source.id] = 0
+		heapPush(open, { id = source.id, g = 0, utility = 0, points = 0, f = 0, tie = (source.id + tieSeed) % 997 })
 	end
 	local expanded = 0
 	while #open > 0 do
 		if control and control.cancelled then return nil, "cancelled" end
 		local current = heapPop(open)
-		if maxCost and current.g > maxCost then break end
+		if maxCost and not useNodePowerPathCost and current.g > maxCost then break end
 		local currentUtility = utilityScore[current.id]
 		if not closed[current.id] and current.g == distance[current.id]
-			and currentUtility ~= nil and (tonumber(current.utility) or 0) == currentUtility then
+			and currentUtility ~= nil and (tonumber(current.utility) or 0) == currentUtility
+			and current.points == pointCost[current.id]
+			and (not maxCost or current.points <= maxCost) then
 			closed[current.id] = true
 			expanded = expanded + 1
 			if progressFunc and expanded % 128 == 0 then
@@ -659,29 +721,38 @@ local function buildPathField(spec, seedNodes, regionByNode, forbidden, allowed,
 						and other.type ~= "Mastery" and not other.ascendancyName
 					))
 					if canTraverse and (isSeed or not blocked) then
-						local tentative = current.g + (isSeed and 0 or 1)
+						local tentativePoints = current.points + (isSeed and 0 or 1)
 						local stepUtility = not isSeed and nodePowerHints and nodePowerHints[other.id] or 0
 						local tentativeUtility = currentUtility + (isFinite(stepUtility) and stepUtility or 0)
-						if (not maxCost or tentative <= maxCost)
-							and (not distance[other.id] or tentative < distance[other.id]
-								or tentative == distance[other.id]
-								and tentativeUtility > (utilityScore[other.id] or -math.huge)) then
+						local tentative = current.g + (isSeed and 0
+							or useNodePowerPathCost and nodePowerEdgeCost(nodePowerHints, other.id) or 1)
+						if (not maxCost or tentativePoints <= maxCost)
+							and pathLabelIsBetter(tentative, tentativeUtility, tentativePoints,
+								distance[other.id], utilityScore[other.id], pointCost[other.id]) then
 							distance[other.id] = tentative
 							utilityScore[other.id] = tentativeUtility
+							pointCost[other.id] = tentativePoints
 							cameFrom[other.id] = current.id
 							local tie = ((other.id * 31) + tieSeed) % 997
 							local edgePriority = importedEdgeEvidencePriority(current.id, other.id, inputs)
 							if edgePriority > 0 then tie = tie - math.floor(edgePriority * 64) end
 							if closed[other.id] then closed[other.id] = nil end
 							heapPush(open, { id = other.id, g = tentative, utility = tentativeUtility,
-								f = tentative, tie = tie })
+								points = tentativePoints, f = tentative, tie = tie })
 						end
 					end
 				end
 			end
 		end
 	end
-	return { starts = starts, distance = distance, cameFrom = cameFrom, expanded = expanded }
+	return {
+		starts = starts,
+		distance = distance,
+		utilityScore = utilityScore,
+		pointCost = pointCost,
+		cameFrom = cameFrom,
+		expanded = expanded,
+	}
 end
 
 local function routeFromPathField(spec, field, targetId)
@@ -697,7 +768,11 @@ local function routeFromPathField(spec, field, targetId)
 		if steps > field.expanded then return nil end
 	end
 	if not cursor then return nil end
-	return route
+	return route, {
+		pointCost = field.pointCost and field.pointCost[targetId] or nil,
+		weightedCost = field.distance[targetId],
+		nodePowerUtility = field.utilityScore and field.utilityScore[targetId] or 0,
+	}
 end
 
 local function regionSet(values)
@@ -1738,7 +1813,8 @@ function treeSearch.BuildCandidateNodes(spec, inputs, limit, progressFunc, maxAd
 	if not regionByNode then return { }, regionError or "Passive-tree regions could not be resolved" end
 	local maxEdgeLength, routeAdjacency, routeGraph = getSearchGraph(spec, inputs.search)
 	local pointLimit = maxAddedPoints or inputs.search.maxAddedPoints
-	local nodePowerHints = buildNodePowerRouteHints(spec, inputs)
+	local nodePowerHints, nodePowerHintCount = buildNodePowerRouteHints(spec, inputs)
+	local nodePowerGuidedSearch = nodePowerHintCount > 0
 	local forbidden = regionSet(inputs.branch.forbidden)
 	local allowed = regionSet(inputs.branch.allowed)
 	if partition == "spatial" and next(allowed) and not forbidden.hub then allowed.hub = true end
@@ -1862,6 +1938,12 @@ function treeSearch.BuildCandidateNodes(spec, inputs, limit, progressFunc, maxAd
 	end
 
 	local candidates, seenCandidates = { }, { }
+	local nodePowerRouteCoverage = inputs.search and inputs.search.nodePowerCoverage
+		and inputs.search.nodePowerCoverage.routePath
+	if nodePowerGuidedSearch and nodePowerRouteCoverage then
+		nodePowerRouteCoverage.utilityGuidedPathsGenerated = 0
+		nodePowerRouteCoverage.nonpositiveTargetsPruned = 0
+	end
 	if next(addedForWaypoints) then
 		local nodeIds = { unpack(addedWaypointOrder) }
 		local routeKey = canonicalNodeKey(nodeIds)
@@ -2044,45 +2126,61 @@ function treeSearch.BuildCandidateNodes(spec, inputs, limit, progressFunc, maxAd
 			local processed = (island - 1) * #targets + index
 			if progressFunc and processed % 8 == 0 then progressFunc(processed, #targets * 4, 0, target.id) end
 			if #candidates >= limit then return candidates end
-			local route, pathStatus
-			if hasNativeRadiusProvider(spec, target) then
-				route = { target }
-			elseif sharedField then
-				route = routeFromPathField(spec, sharedField, target.id)
-			else
-				local goals = { [target.id] = target }
-				-- Explicit target routing and small route pools retain target-specific A*.
-				local tieSeed = (inputs.search.seed + index * 7919 + island * 104729) % 2147483647
-				local ignored
-				route, ignored, pathStatus = findPath(spec, seeds, goals, regionByNode, forbidden, allowed,
-					blockedNodeIds, tieSeed, maxEdgeLength, control, progressFunc, processed, #targets * 4,
-					remainingRoutePoints, inputs, island == 1 and nodePowerHints or nil, routeAdjacency)
-			end
-			if pathStatus == "cancelled" then return { }, nil, true end
-			if route then
-				local nodeSet, nodeIds = { }, { unpack(addedWaypointOrder) }
-				for _, nodeId in ipairs(nodeIds) do nodeSet[nodeId] = true end
-				for _, node in ipairs(route) do
-					if not nodeSet[node.id] and not spec.allocNodes[node.id] then
-						nodeSet[node.id] = true
-						nodeIds[#nodeIds + 1] = node.id
-					end
+			local focusedNodePowerPass = island == 1 and nodePowerGuidedSearch
+			local targetUtility = nodePowerHints[target.id]
+			local pruneNonpositiveTarget = focusedNodePowerPass and not requestedTargetId
+				and (not isFinite(targetUtility) or targetUtility <= 0)
+			if pruneNonpositiveTarget then
+				if nodePowerRouteCoverage then
+					nodePowerRouteCoverage.nonpositiveTargetsPruned = nodePowerRouteCoverage.nonpositiveTargetsPruned + 1
 				end
-				if #nodeIds > 0 and #nodeIds <= (maxAddedPoints or inputs.search.maxAddedPoints) then
-					-- Preserve A*'s seed-to-target order. PassiveSpec:AllocNode needs
-					-- each requested node to be reachable from the current allocation;
-					-- only the deduplication key is canonicalized numerically.
-					local routeKey = canonicalNodeKey(nodeIds)
-					if not seenCandidates[routeKey] then
-						seenCandidates[routeKey] = true
-						candidates[#candidates + 1] = {
-							nodeIds = nodeIds,
-							targetId = target.id,
-							targetRegion = regionByNode[target.id],
-							routePointCost = #nodeIds,
-							label = target.dn or target.name or ("Passive " .. tostring(target.id)),
-							island = island,
-						}
+			else
+				local route, pathStatus, routeStats
+				if hasNativeRadiusProvider(spec, target) then
+					route = { target }
+				elseif sharedField then
+					route, routeStats = routeFromPathField(spec, sharedField, target.id)
+				else
+					local goals = { [target.id] = target }
+					-- Explicit target routing and small route pools retain target-specific A*.
+					local tieSeed = (inputs.search.seed + index * 7919 + island * 104729) % 2147483647
+					local ignored
+					route, ignored, pathStatus, routeStats = findPath(spec, seeds, goals, regionByNode, forbidden, allowed,
+						blockedNodeIds, tieSeed, maxEdgeLength, control, progressFunc, processed, #targets * 4,
+						remainingRoutePoints, inputs, island == 1 and nodePowerHints or nil, routeAdjacency)
+				end
+				if pathStatus == "cancelled" then return { }, nil, true end
+				if route then
+					local nodeSet, nodeIds = { }, { unpack(addedWaypointOrder) }
+					for _, nodeId in ipairs(nodeIds) do nodeSet[nodeId] = true end
+					for _, node in ipairs(route) do
+						if not nodeSet[node.id] and not spec.allocNodes[node.id] then
+							nodeSet[node.id] = true
+							nodeIds[#nodeIds + 1] = node.id
+						end
+					end
+					if #nodeIds > 0 and #nodeIds <= (maxAddedPoints or inputs.search.maxAddedPoints) then
+						-- Preserve A*'s seed-to-target order. PassiveSpec:AllocNode needs
+						-- each requested node to be reachable from the current allocation;
+						-- only the deduplication key is canonicalized numerically.
+						local routeKey = canonicalNodeKey(nodeIds)
+						if not seenCandidates[routeKey] then
+							seenCandidates[routeKey] = true
+							candidates[#candidates + 1] = {
+								nodeIds = nodeIds,
+								targetId = target.id,
+								targetRegion = regionByNode[target.id],
+								routePointCost = #nodeIds,
+								label = target.dn or target.name or ("Passive " .. tostring(target.id)),
+								island = island,
+								nodePowerGuidedPath = focusedNodePowerPass,
+								nodePowerPathUtility = focusedNodePowerPass and routeStats and routeStats.nodePowerUtility or nil,
+								nodePowerPathWeightedCost = focusedNodePowerPass and routeStats and routeStats.weightedCost or nil,
+							}
+							if focusedNodePowerPass and nodePowerRouteCoverage then
+								nodePowerRouteCoverage.utilityGuidedPathsGenerated = nodePowerRouteCoverage.utilityGuidedPathsGenerated + 1
+							end
+						end
 					end
 				end
 			end

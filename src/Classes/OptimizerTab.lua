@@ -2186,11 +2186,16 @@ function OptimizerTabClass.FormatResultDetails(tab, viewWidth, selectedRoute)
 				local keyDistanceText = type(routePath) == "table"
 					and (routePath.keyNodeDistanceIndex == "built" or routePath.keyNodeDistanceIndex == "reused")
 					and (" Precomputed hop distances for " .. tostring(routePath.keyNodeCount or 0) .. " native Notables/Keystones.") or ""
+				local utilitySearchText = type(routePath) == "table" and tonumber(routePath.utilityWeight)
+					and (" Utility-weighted A* (lambda=" .. string.format("%.2f", routePath.utilityWeight)
+						.. ") generated " .. tostring(routePath.utilityGuidedPathsGenerated or 0)
+						.. " focused routes; pruned " .. tostring(routePath.nonpositiveTargetsPruned or 0)
+						.. " nonpositive targets from that pass. The passive-point budget remains exact.") or ""
 				local routePathText = type(routePath) == "table" and routePath.status == "available"
-					and (" Native marginal values guide equal-cost path ties across "
+					and (" Native marginal values guide utility-weighted paths across "
 						.. tostring(routePath.hintedNodes or 0) .. " eligible nodes; "
 						.. tostring(routePath.hotspotChainsGenerated or 0)
-						.. " connected Notable/Keystone route(s) were proposed." .. keyDistanceText) or ""
+						.. " connected Notable/Keystone route(s) were proposed." .. utilitySearchText .. keyDistanceText) or ""
 				add("Show Node Power: native " .. nodePowerStat .. " guided target order for "
 					.. tostring(nodePowerCoverage.prioritizedTargets or 0) .. " of "
 					.. tostring(nodePowerCoverage.targets or 0) .. " legal targets."
