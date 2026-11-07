@@ -11,8 +11,11 @@ local SpatialZones = require("Modules.Optimizer.SpatialZones")
 local Inputs = require("Modules.Optimizer.Inputs")
 
 local treeSearch = { }
+local routeGraphCache = setmetatable({ }, { __mode = "k" })
 local MAX_ARCHIVED_ROUTE_TARGET_ATTEMPTS = 32
 local MAX_ARCHIVED_ROUTE_VARIANTS_PER_PATTERN = 4
+local MAX_NODE_POWER_HOTSPOTS = 3
+local MAX_NODE_POWER_HOTSPOT_CHAINS = 3
 local timelessTypeByConqueror = {
 	vaal = 1,
 	karui = 2,
@@ -83,6 +86,8 @@ local function buildNodePowerRouteHints(spec, inputs)
 			status = search.useShowNodePower == true and "unavailable" or "disabled",
 			selection = "equal_point_cost_utility_tiebreak",
 			hintedNodes = 0,
+			hotspotCandidates = 0,
+			hotspotChainsGenerated = 0,
 			stat = search.nodePowerStat,
 		}
 		return { }, 0
@@ -108,8 +113,10 @@ local function buildNodePowerRouteHints(spec, inputs)
 	search.nodePowerCoverage = search.nodePowerCoverage or { }
 	search.nodePowerCoverage.routePath = {
 		status = count > 0 and "available" or "unavailable",
-		selection = "equal_point_cost_utility_tiebreak",
+		selection = "equal_cost_tiebreak_and_bounded_hotspot_chains",
 		hintedNodes = count,
+		hotspotCandidates = 0,
+		hotspotChainsGenerated = 0,
 		stat = search.nodePowerStat,
 	}
 	if count > 0 then
@@ -361,43 +368,84 @@ local function heuristic(node, goals, maxEdgeLength)
 	return best == math.huge and 0 or best
 end
 
-local function findMaxEdgeLength(spec)
-	local maxEdgeLength = 0
-	for _, node in pairs(spec.nodes) do
-		if node.x and node.y then
-			for _, linked in ipairs(node.linked or { }) do
-				if linked.x and linked.y then
+-- The passive-tree topology is immutable for a parsed spec. Cache its compact
+-- numeric adjacency by the nodes table, while validating node/link identities
+-- and cardinalities so a rebuilt or expanded fixture cannot reuse stale paths.
+local function getSearchGraph(spec, search)
+	local nodes = spec and spec.nodes or { }
+	local cached = routeGraphCache[nodes]
+	local nodeCount, cacheValid = 0, cached ~= nil
+	if cached then
+		for nodeId, node in pairs(nodes) do
+			nodeCount = nodeCount + 1
+			if cached.nodeRefs[nodeId] ~= node or cached.linkRefs[nodeId] ~= (node and node.linked)
+				or cached.linkCounts[nodeId] ~= #(node and node.linked or { }) then
+				cacheValid = false
+			end
+			local cachedNeighbors = cached.adjacency[nodeId] or { }
+			local neighborCount = 0
+			for _, linked in ipairs(node and node.linked or { }) do
+				local linkedId = linked and linked.id
+				if linkedId and nodes[linkedId] then
+					neighborCount = neighborCount + 1
+					if cachedNeighbors[neighborCount] ~= linkedId then cacheValid = false end
+				end
+			end
+			if neighborCount ~= #cachedNeighbors then cacheValid = false end
+		end
+		if nodeCount ~= cached.nodeCount then cacheValid = false end
+	else
+		for _ in pairs(nodes) do nodeCount = nodeCount + 1 end
+	end
+	local status = "hit"
+	if not cacheValid then
+		status = "rebuilt"
+		local adjacency, nodeRefs, linkRefs, linkCounts = { }, { }, { }, { }
+		local maxEdgeLength, edgeCount = 0, 0
+		for nodeId, node in pairs(nodes) do
+			nodeRefs[nodeId] = node
+			linkRefs[nodeId] = node and node.linked
+			linkCounts[nodeId] = #(node and node.linked or { })
+			local neighbors, seen = { }, { }
+			for _, linked in ipairs(node and node.linked or { }) do
+				local linkedId = linked and linked.id
+				if linkedId and nodes[linkedId] and not seen[linkedId] then
+					seen[linkedId] = true
+					neighbors[#neighbors + 1] = linkedId
+					edgeCount = edgeCount + 1
+				end
+				if node and node.x and node.y and linked and linked.x and linked.y then
 					local dx, dy = node.x - linked.x, node.y - linked.y
 					maxEdgeLength = math.max(maxEdgeLength, math.sqrt(dx * dx + dy * dy))
 				end
 			end
+			adjacency[nodeId] = neighbors
 		end
+		cached = {
+			nodeCount = nodeCount,
+			nodeRefs = nodeRefs,
+			linkRefs = linkRefs,
+			linkCounts = linkCounts,
+			adjacency = adjacency,
+			maxEdgeLength = maxEdgeLength > 0 and maxEdgeLength or 1,
+			edgeCount = edgeCount,
+		}
+		routeGraphCache[nodes] = cached
 	end
-	return maxEdgeLength > 0 and maxEdgeLength or 1
-end
-
--- Flatten PoB's linked-node objects once per route-generation pass. The same
--- compact adjacency arrays are reused by every A* island and path field.
-local function buildSearchAdjacency(spec)
-	local adjacency = { }
-	for nodeId, node in pairs(spec and spec.nodes or { }) do
-		local neighbors, seen = { }, { }
-		for _, linked in ipairs(node and node.linked or { }) do
-			local linkedId = linked and linked.id
-			if linkedId and spec.nodes[linkedId] and not seen[linkedId] then
-				seen[linkedId] = true
-				neighbors[#neighbors + 1] = linkedId
-			end
-		end
-		adjacency[nodeId] = neighbors
+	if search then
+		search.routeGraphCache = {
+			status = status,
+			nodes = cached.nodeCount,
+			directedEdges = cached.edgeCount,
+		}
 	end
-	return adjacency
+	return cached.maxEdgeLength, cached.adjacency
 end
 
 local function findPath(spec, seedNodes, goals, regionByNode, forbidden, allowed, blockedNodeIds, tieSeed, maxEdgeLength, control, progressFunc, progressDone, progressTotal, maxCost, inputs, nodePowerHints, adjacency)
 	local open, gScore, utilityScore, cameFrom, closed = { }, { }, { }, { }, { }
 	local useNodePowerPathTie = type(nodePowerHints) == "table" and next(nodePowerHints) ~= nil
-	maxEdgeLength = maxEdgeLength or findMaxEdgeLength(spec)
+	if not maxEdgeLength then maxEdgeLength = select(1, getSearchGraph(spec, inputs and inputs.search)) end
 	local starts = { }
 	for _, source in pairs(seedNodes) do
 		if source and spec.nodes[source.id] and not starts[source.id] then
@@ -1607,8 +1655,7 @@ function treeSearch.BuildCandidateNodes(spec, inputs, limit, progressFunc, maxAd
 	local regionByNode, partitionMetadata, regionError = suppliedRegionMap, nil, nil
 	if not regionByNode then regionByNode, partitionMetadata, regionError = treeSearch.BuildRegionMap(spec, partition) end
 	if not regionByNode then return { }, regionError or "Passive-tree regions could not be resolved" end
-	local maxEdgeLength = findMaxEdgeLength(spec)
-	local routeAdjacency = buildSearchAdjacency(spec)
+	local maxEdgeLength, routeAdjacency = getSearchGraph(spec, inputs.search)
 	local pointLimit = maxAddedPoints or inputs.search.maxAddedPoints
 	local nodePowerHints = buildNodePowerRouteHints(spec, inputs)
 	local forbidden = regionSet(inputs.branch.forbidden)
@@ -1741,6 +1788,102 @@ function treeSearch.BuildCandidateNodes(spec, inputs, limit, progressFunc, maxAd
 		candidates[1] = { nodeIds = nodeIds, isRequiredPath = true, label = "Required passive path", island = 1 }
 		if #candidates >= limit then return candidates end
 	end
+	-- Add a small family of longer, connected routes through high-value native
+	-- Node Power Notables/Keystones. These are proposal hints only: every route
+	-- is still checked by the exact PoB calculator and the active hard gates.
+	local function appendNodePowerHotspotChains()
+		local search = inputs.search or { }
+		local coverage = search.nodePowerCoverage and search.nodePowerCoverage.routePath
+		if requestedTargetId or search.useShowNodePower ~= true or type(nodePowerHints) ~= "table" then return end
+		local hotspots = { }
+		for _, node in ipairs(targets) do
+			local utility = nodePowerHints[node.id]
+			if (node.type == "Notable" or node.type == "Keystone") and isFinite(utility) and utility > 0 then
+				hotspots[#hotspots + 1] = { node = node, utility = utility }
+			end
+		end
+		t_sort(hotspots, function(left, right)
+			if left.utility ~= right.utility then return left.utility > right.utility end
+			if left.node.type ~= right.node.type then return left.node.type == "Keystone" end
+			return left.node.id < right.node.id
+		end)
+		while #hotspots > MAX_NODE_POWER_HOTSPOTS do table.remove(hotspots) end
+		if coverage then coverage.hotspotCandidates = #hotspots end
+		if #hotspots < 2 then return end
+		local plans = { { 1, 2 } }
+		if #hotspots >= 3 then
+			plans[#plans + 1] = { 1, 3 }
+			plans[#plans + 1] = { 1, 2, 3 }
+		end
+		local generated = 0
+		for chainIndex = 1, math.min(#plans, MAX_NODE_POWER_HOTSPOT_CHAINS) do
+			if #candidates >= limit then break end
+			if control and control.cancelled then return nil, true end
+			local nodeIds, nodeSet, routeSeeds, seedSeen = { unpack(addedWaypointOrder) }, { }, { }, { }
+			for _, nodeId in ipairs(nodeIds) do nodeSet[nodeId] = true end
+			for _, seed in ipairs(seeds) do
+				if seed and not seedSeen[seed.id] then
+					seedSeen[seed.id] = true
+					routeSeeds[#routeSeeds + 1] = seed
+				end
+			end
+			local hotspotIds, valid = { }, true
+			for _, hotspotIndex in ipairs(plans[chainIndex]) do
+				local hotspot = hotspots[hotspotIndex] and hotspots[hotspotIndex].node
+				if hotspot then
+					hotspotIds[#hotspotIds + 1] = hotspot.id
+					if not spec.allocNodes[hotspot.id] and not nodeSet[hotspot.id] then
+						local remaining = pointLimit - #nodeIds
+						if remaining <= 0 then valid = false; break end
+						local route, _, pathStatus = findPath(spec, routeSeeds, { [hotspot.id] = hotspot },
+							regionByNode, forbidden, allowed, blockedNodeIds,
+							(inputs.search.seed + chainIndex * 104729 + hotspotIndex * 7919) % 2147483647,
+							maxEdgeLength, control, progressFunc, chainIndex, #plans,
+							remaining, inputs, nodePowerHints, routeAdjacency)
+						if pathStatus == "cancelled" then return nil, true end
+						if not route then valid = false; break end
+						for _, pathNode in ipairs(route) do
+							if not spec.allocNodes[pathNode.id] and not nodeSet[pathNode.id] then
+								nodeSet[pathNode.id] = true
+								nodeIds[#nodeIds + 1] = pathNode.id
+								if not seedSeen[pathNode.id] then
+									seedSeen[pathNode.id] = true
+									routeSeeds[#routeSeeds + 1] = pathNode
+								end
+							end
+						end
+					end
+				end
+			end
+			if valid and #nodeIds > #addedWaypointOrder and #nodeIds <= pointLimit then
+				local routeKey = canonicalNodeKey(nodeIds)
+				if not seenCandidates[routeKey] then
+					seenCandidates[routeKey] = true
+					local labels = { }
+					for _, nodeId in ipairs(hotspotIds) do
+						local node = spec.nodes[nodeId]
+						labels[#labels + 1] = node and (node.dn or node.name) or tostring(nodeId)
+					end
+					candidates[#candidates + 1] = {
+						nodeIds = nodeIds,
+						targetId = hotspotIds[#hotspotIds],
+						targetRegion = regionByNode[hotspotIds[#hotspotIds]],
+						routePointCost = #nodeIds,
+						routeFamily = "node_power_hotspot_chain",
+						hotspotNodeIds = hotspotIds,
+						label = "Show Node Power route: " .. table.concat(labels, " -> "),
+						island = chainIndex,
+					}
+					generated = generated + 1
+				end
+			end
+		end
+		if coverage then coverage.hotspotChainsGenerated = generated end
+		return generated
+	end
+	local _, hotspotCancelled = appendNodePowerHotspotChains()
+	if hotspotCancelled then return { }, nil, true end
+	if #candidates >= limit then return candidates end
 	local remainingRoutePoints = pointLimit - countSet(addedForWaypoints)
 	-- A 120-proposal pool is the native default. Keep it on the shared field
 	-- path too; the old 128/128 threshold sent that common workload through up
@@ -1872,8 +2015,7 @@ function treeSearch.BuildArchivedRouteCandidates(spec, inputs, routePatterns, li
 		end
 	end
 	if #baseSeeds == 0 then return candidates, coverage end
-	local maxEdgeLength = findMaxEdgeLength(spec)
-	local routeAdjacency = buildSearchAdjacency(spec)
+	local maxEdgeLength, routeAdjacency = getSearchGraph(spec, search)
 	local function mainTreeNode(node)
 		return type(node) == "table" and not node.ascendancyName and node.type ~= "AscendClassStart"
 			and node.type ~= "Mastery" and node.type ~= "Socket" and not node.isProxy and not node.isMultipleChoiceOption

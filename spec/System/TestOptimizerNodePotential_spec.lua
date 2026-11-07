@@ -210,6 +210,58 @@ describe("AI Planner exact node-potential review", function()
 		newBuild()
 	end)
 
+	it("proposes bounded connected Node Power hotspot chains and reuses valid tree adjacency", function()
+		newBuild()
+		local start = { id = 1, type = "ClassStart", alloc = true, x = 0, y = 0, linked = { } }
+		local first = { id = 2, type = "Notable", alloc = false, x = 1, y = 0, linked = { }, dn = "First Hotspot" }
+		local connector = { id = 3, type = "Normal", alloc = false, x = 1, y = 1, linked = { } }
+		local second = { id = 4, type = "Notable", alloc = false, x = 2, y = 1, linked = { }, dn = "Second Hotspot" }
+		local function connect(left, right)
+			left.linked[#left.linked + 1] = right
+			right.linked[#right.linked + 1] = left
+		end
+		connect(start, first)
+		connect(start, connector)
+		connect(connector, second)
+		first.power = { singleStat = 100 }
+		second.power = { singleStat = 90 }
+		local spec = {
+			nodes = { [1] = start, [2] = first, [3] = connector, [4] = second },
+			allocNodes = { [1] = start },
+			tree = { classes = { [1] = { name = "Test", startNodeId = 1 } } },
+		}
+		local parsed = assert(Inputs.Parse({ generationPhase = "tree", maxAddedPoints = "4",
+			evaluationBudget = "8", seed = "29" }))
+		parsed.search.useShowNodePower = true
+		parsed.search.nodePowerStat = "CombinedDPS"
+		parsed.search.nodePowerFocusStat = "CombinedDPS"
+		local function buildCandidates()
+			local candidates, err = TreeSearch.BuildCandidateNodes(spec, parsed, 8, nil, 4)
+			assert.is_truthy(candidates, err)
+			return candidates
+		end
+		local candidates = buildCandidates()
+		local chain
+		for _, candidate in ipairs(candidates) do
+			if candidate.routeFamily == "node_power_hotspot_chain" then chain = candidate; break end
+		end
+		assert.is_truthy(chain, "matching native values should add a connected hotspot proposal")
+		assert.are.same({ 2, 4 }, chain.hotspotNodeIds)
+		assert.are.same({ 2, 3, 4 }, chain.nodeIds,
+			"the connector route should retain seed-to-target order across both hotspots")
+		assert.are.equal(1, parsed.search.nodePowerCoverage.routePath.hotspotChainsGenerated)
+		assert.are.equal("rebuilt", parsed.search.routeGraphCache.status)
+		buildCandidates()
+		assert.are.equal("hit", parsed.search.routeGraphCache.status,
+			"repeated searches over the same immutable tree should reuse compact adjacency")
+		spec.nodes[5] = { id = 5, type = "Normal", alloc = false, x = 3, y = 1, linked = { } }
+		buildCandidates()
+		assert.are.equal("rebuilt", parsed.search.routeGraphCache.status,
+			"a changed node set must invalidate cached adjacency")
+		assert.are.equal(5, parsed.search.routeGraphCache.nodes)
+		newBuild()
+	end)
+
 	it("feeds bounded imported graph evidence into the ordinary Run action", function()
 		newBuild()
 		local seed, seedError = SkillSeed.Create(build, "Metadata/Items/Gems/SkillGemFireball")

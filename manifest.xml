@@ -162,7 +162,7 @@
 	<File name="Classes/ModStore.lua" part="program" sha1="2ea68071ac22ddc942b6cba23ea1c69182b7833d" />
 	<File name="Classes/NotableDBControl.lua" part="program" sha1="339502f47fff51beefd40d275076ded7635f927e" />
 	<File name="Classes/NotesTab.lua" part="program" sha1="7f339836f6a597f6e64237a3d8036efda685b358" />
-	<File name="Classes/OptimizerTab.lua" part="program" sha1="13ac5b89ef1ad1883fbd47c5ec99d8c47d4c17ea" />
+	<File name="Classes/OptimizerTab.lua" part="program" sha1="d75bf2cd1dc9f1def7f7dbd701492e746b504fb4" />
 	<File name="Classes/OptimizerTab.lua.before-approved-attack-scope-20261028-022330Z.bak" part="program" sha1="b05bdda64a594c57500e9e6b84b271584031b2ad" />
 	<File name="Classes/OptimizerTab.lua.before-paired-review-history-dashboard-20261025.bak" part="program" sha1="e8701583ba4652244f03e239c248c3cf01e61b23" />
 	<File name="Classes/PartyTab.lua" part="program" sha1="a6711d37e5f877d1de410bdf538681b02dad798c" />
@@ -490,7 +490,7 @@
 	<File name="Modules/Optimizer/SyntheticGear.lua" part="program" sha1="80721f20be45eefc1bbb156b9d3b4e014e607f5a" />
 	<File name="Modules/Optimizer/TrainingData.lua" part="program" sha1="a337d19f3e0d99b444e7c93ddcdc796810f39b22" />
 	<File name="Modules/Optimizer/TrainingData.lua.before-20261025-034100.bak" part="program" sha1="fb19bdc689867409e5b9fcf037ce7891b3e7ab35" />
-	<File name="Modules/Optimizer/TreeSearch.lua" part="program" sha1="1a11dbc59cad1553a922360a890eb1d2dd0c000e" />
+	<File name="Modules/Optimizer/TreeSearch.lua" part="program" sha1="10eb51d64be5d1ac8d46c512c569e9ccc2a1d546" />
 	<File name="Modules/Optimizer/Validator.lua" part="program" sha1="d24a7366ce818f4794a9635de1e1cff8512acea4" />
 	<File name="Modules/Optimizer/Version.lua" part="program" sha1="14b0874324c67993aec8a670f8d1cdf883c05b7e" />
 	<File name="Modules/PantheonTools.lua" part="program" sha1="ebe91a7d8f8444a6061acf4758da0e775cc8c314" />
